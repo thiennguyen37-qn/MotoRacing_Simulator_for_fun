@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data (raw/processed CSVs thường không push lên nếu nhạy cảm)
+# Bỏ comment dòng dưới nếu muốn loại trừ data:
+# data/processed/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

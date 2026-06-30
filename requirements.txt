@@ -1,0 +1,8 @@
+# Core data
+pandas>=2.2
+numpy>=1.26
+
+# Jupyter environment
+notebook>=7.0
+jupyterlab>=4.0
+ipykernel>=6.0

@@ -1,0 +1,13 @@
+﻿manufacturer,team_status,top_speed,acceleration,braking,cornering,stability
+BMW,satellite,83,83,68,81,78
+BMW,factory,88,88,73,86,83
+Ducati,satellite,92,86,86,85,85
+Ducati,factory,97,91,91,90,90
+Honda,satellite,80,84,73,80,83
+Honda,factory,85,89,78,85,88
+Kawasaki,factory,86,89,89,88,93
+Suzuki,factory,87,89,85,94,91
+Triumph,satellite,72,73,74,70,72
+Triumph,factory,77,78,79,75,77
+Yamaha,satellite,75,76,85,88,83
+Yamaha,factory,80,81,90,93,88

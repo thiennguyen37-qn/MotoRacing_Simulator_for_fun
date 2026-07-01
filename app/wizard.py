@@ -47,6 +47,7 @@ class MotoWizard(QWizard):
         from app.pages.p2_qualifying   import QualifyingPage
         from app.pages.p3_race         import RacePage
         from app.pages.p4_championship import ChampionshipPage
+        from app.pages.p_gallery       import GalleryPage
 
         self.ID_HOME      = self.addPage(HomePage(self))
         self.ID_CIRCUIT   = self.addPage(CircuitPage(self))
@@ -54,6 +55,7 @@ class MotoWizard(QWizard):
         self.ID_QUALI     = self.addPage(QualifyingPage(self))
         self.ID_RACE      = self.addPage(RacePage(self))
         self.ID_STANDINGS = self.addPage(ChampionshipPage(self))
+        self.ID_GALLERY   = self.addPage(GalleryPage(self))
 
         # initializePage() called every time a page is entered (needed for championship loop)
         self.setOption(QWizard.WizardOption.IndependentPages)
@@ -81,6 +83,12 @@ class MotoWizard(QWizard):
     def _on_page_changed(self, page_id):
         if page_id == self.ID_HOME:
             self.setButtonLayout([])
+        elif page_id == self.ID_GALLERY:
+            self.setButtonLayout([
+                QWizard.WizardButton.BackButton,
+                QWizard.WizardButton.Stretch,
+                QWizard.WizardButton.CancelButton,
+            ])
         else:
             self.setButtonLayout([
                 QWizard.WizardButton.BackButton,

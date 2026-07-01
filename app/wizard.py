@@ -68,9 +68,24 @@ class MotoWizard(QWizard):
 
         # Hide Back button on homepage, show on all other pages
         self.currentIdChanged.connect(self._on_page_changed)
+        self._on_page_changed(self.ID_HOME)   # currentIdChanged doesn't fire on startup
+
+    def accept(self):
+        if self.mode == 'random':
+            # Finish in Random Race → go back to homepage, not exit
+            self.restart()
+            self.page(self.ID_HOME).initializePage()
+        else:
+            super().accept()
 
     def _on_page_changed(self, page_id):
-        is_home = page_id == self.ID_HOME
-        self.button(QWizard.WizardButton.BackButton).setVisible(not is_home)
-        self.button(QWizard.WizardButton.NextButton).setVisible(not is_home)
-        self.button(QWizard.WizardButton.CancelButton).setVisible(not is_home)
+        if page_id == self.ID_HOME:
+            self.setButtonLayout([])
+        else:
+            self.setButtonLayout([
+                QWizard.WizardButton.BackButton,
+                QWizard.WizardButton.Stretch,
+                QWizard.WizardButton.CancelButton,
+                QWizard.WizardButton.NextButton,
+                QWizard.WizardButton.FinishButton,
+            ])

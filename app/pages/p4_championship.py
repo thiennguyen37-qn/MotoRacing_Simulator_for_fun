@@ -1,38 +1,10 @@
 import pandas as pd
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
-                              QPushButton, QLabel, QTableWidget,
-                              QTableWidgetItem, QTabWidget)
-from PyQt6.QtGui import QFont, QColor
+                              QPushButton, QLabel, QTabWidget)
+from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
 
-
-def _make_table(headers):
-    t = QTableWidget()
-    t.setColumnCount(len(headers))
-    t.setHorizontalHeaderLabels(headers)
-    t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-    t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-    t.setAlternatingRowColors(True)
-    t.verticalHeader().setVisible(False)
-    t.setFont(QFont('Courier New', 9))
-    return t
-
-
-def _fill(table, rows):
-    table.setRowCount(len(rows))
-    gold   = QColor(212, 175, 55)
-    silver = QColor(170, 170, 170)
-    bronze = QColor(180, 120, 60)
-    medals = {0: gold, 1: silver, 2: bronze}
-    for r, row in enumerate(rows):
-        for c, val in enumerate(row):
-            item = QTableWidgetItem(str(val))
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            if r in medals:
-                item.setForeground(medals[r])
-            table.setItem(r, c, item)
-    table.resizeColumnsToContents()
-    table.horizontalHeader().setStretchLastSection(True)
+from app.widgets.table_utils import make_table, fill_table
 
 
 class ChampionshipPage(QWizardPage):
@@ -59,9 +31,9 @@ class ChampionshipPage(QWizardPage):
         layout.addLayout(ctrl)
 
         self._tabs = QTabWidget()
-        self._t_riders = _make_table(['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'PTS'])
-        self._t_teams  = _make_table(['P', 'TEAM', 'PTS'])
-        self._t_manu   = _make_table(['P', 'MANUFACTURER', 'PTS'])
+        self._t_riders = make_table(['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'PTS'])
+        self._t_teams  = make_table(['P', 'TEAM', 'PTS'])
+        self._t_manu   = make_table(['P', 'MANUFACTURER', 'PTS'])
         self._tabs.addTab(self._t_riders, 'Riders')
         self._tabs.addTab(self._t_teams,  'Teams')
         self._tabs.addTab(self._t_manu,   'Manufacturers')
@@ -144,16 +116,18 @@ class ChampionshipPage(QWizardPage):
             .sum().sort_values('points', ascending=False).reset_index(drop=True)
         )
 
-        _fill(self._t_riders, [
+        fill_table(self._t_riders, [
             [i + 1, f"#{r['bike_number']}", r['name'], r['team'], r['manufacturer'], r['points']]
             for i, r in self._rider_total.iterrows()
-        ])
-        _fill(self._t_teams, [
+        ])                                              # manu_col_idx=4, num_col_idx=1
+
+        fill_table(self._t_teams, [
             [i + 1, r['team'], r['points']] for i, r in self._team_total.iterrows()
-        ])
-        _fill(self._t_manu, [
+        ], team_col_idx=1, manu_col_idx=None, num_col_idx=None, name_col_idx=1, stretch_col=1)
+
+        fill_table(self._t_manu, [
             [i + 1, r['manufacturer'], r['points']] for i, r in self._manu_total.iterrows()
-        ])
+        ], team_col_idx=None, manu_col_idx=1, num_col_idx=None, name_col_idx=1, stretch_col=1)
 
     # ── Export ───────────────────────────────────────────────────────────────
 

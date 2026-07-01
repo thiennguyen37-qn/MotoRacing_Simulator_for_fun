@@ -1,49 +1,78 @@
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
-                              QPushButton, QLabel, QTableWidget,
-                              QTableWidgetItem, QTabWidget)
-from PyQt6.QtGui import QFont, QColor
+                              QPushButton, QLabel, QTableWidgetItem, QTabWidget)
+from PyQt6.QtGui import QFont, QColor, QBrush, QPen
 from PyQt6.QtCore import Qt
 
 from src.simulator import run_race
+from PyQt6.QtWidgets import QHeaderView
+from app.widgets.table_utils import make_table, TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR, row_bg, _is_time
 
 HEADERS = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'RACE TIME', 'GAP']
 
-
-def _make_table():
-    t = QTableWidget()
-    t.setColumnCount(len(HEADERS))
-    t.setHorizontalHeaderLabels(HEADERS)
-    t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-    t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-    t.setAlternatingRowColors(True)
-    t.verticalHeader().setVisible(False)
-    t.setFont(QFont('Courier New', 9))
-    return t
+_DNF_COLOR  = QColor(180, 55, 55)
+_TEXT_COLOR = QColor(160, 160, 180)
 
 
 def _fill(table, result_df, meta):
     rows = result_df.to_dict('records')
     table.setRowCount(len(rows))
-    red = QColor(200, 60, 60)
     for r, row in enumerate(rows):
+        dnf     = bool(row.get('dnf'))
+        manu    = row.get('manufacturer', '')
+        color   = TEAM_COLOR.get(row.get('team', '')) or MANU_COLOR.get(manu, _DEFAULT_COLOR)
+        bg      = row_bg(color.darker(140) if dnf else color)
+        lighter = QColor(
+            min(color.red()   + 80, 255),
+            min(color.green() + 80, 255),
+            min(color.blue()  + 80, 255),
+        )
+        accent = color.darker(160) if dnf else color
+
         fl_tag = ' ⚡' if row.get('fastest_lap') else ''
+        # col 2 = rider name: uppercase
         vals = [
             row['pos_label'],
             f"#{row['bike_number']}",
-            row['name'] + fl_tag,
+            (row['name'] + fl_tag).upper(),
             row['team'],
             row['manufacturer'],
             row['time_fmt'],
             row['gap_fmt'],
         ]
         for c, val in enumerate(vals):
-            item = QTableWidgetItem(str(val))
+            txt  = str(val)
+            item = QTableWidgetItem(txt)
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            if row.get('dnf'):
-                item.setForeground(red)
+            item.setBackground(QBrush(bg))
+
+            if c == 0:
+                item.setData(Qt.ItemDataRole.UserRole, accent)
+                item.setForeground(QBrush(QColor(200, 80, 80) if dnf else QColor(220, 220, 235)))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+                item.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+            elif c == 1:
+                item.setForeground(QBrush(_DNF_COLOR if dnf else lighter))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+                item.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
+            elif c == 2:
+                # Rider name — bold, already uppercased above
+                item.setForeground(QBrush(_DNF_COLOR if dnf else QColor(235, 235, 248)))
+                item.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
+            elif _is_time(txt):
+                item.setForeground(QBrush(_DNF_COLOR if dnf else QColor(210, 210, 228)))
+                item.setFont(QFont('Consolas', 10))
+            else:
+                item.setForeground(QBrush(_DNF_COLOR if dnf else _TEXT_COLOR))
+                item.setFont(QFont('Segoe UI', 10))
+
             table.setItem(r, c, item)
+
     table.resizeColumnsToContents()
-    table.horizontalHeader().setStretchLastSection(True)
+    table.setColumnWidth(0, 56)
+    table.setColumnWidth(1, 56)
+    hdr = table.horizontalHeader()
+    hdr.setStretchLastSection(False)
+    hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # TEAM col fills width
 
 
 class RacePage(QWizardPage):
@@ -72,8 +101,8 @@ class RacePage(QWizardPage):
         layout.addLayout(ctrl)
 
         self._tabs = QTabWidget()
-        self._t_r1 = _make_table()
-        self._t_r2 = _make_table()
+        self._t_r1 = make_table(HEADERS)
+        self._t_r2 = make_table(HEADERS)
         self._tabs.addTab(self._t_r1, 'Race 1')
         self._tabs.addTab(self._t_r2, 'Race 2')
         layout.addWidget(self._tabs)

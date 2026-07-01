@@ -1,25 +1,12 @@
-from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
-                              QPushButton, QLabel, QTableWidget,
-                              QTableWidgetItem, QHeaderView)
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtWidgets import QWizardPage, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
 
 from src.simulator import run_practice
 from app.wizard import REPORT_ROOT
-
+from app.widgets.table_utils import make_table, fill_table
 
 HEADERS = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'BEST LAP', 'GAP']
-
-
-def _fill(table, rows):
-    table.setRowCount(len(rows))
-    for r, row in enumerate(rows):
-        for c, val in enumerate(row):
-            item = QTableWidgetItem(str(val))
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            table.setItem(r, c, item)
-    table.resizeColumnsToContents()
-    table.horizontalHeader().setStretchLastSection(True)
 
 
 class PracticePage(QWizardPage):
@@ -42,15 +29,7 @@ class PracticePage(QWizardPage):
         ctrl.addWidget(self._status, 1)
         layout.addLayout(ctrl)
 
-        # Results table
-        self._table = QTableWidget()
-        self._table.setColumnCount(len(HEADERS))
-        self._table.setHorizontalHeaderLabels(HEADERS)
-        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setAlternatingRowColors(True)
-        self._table.verticalHeader().setVisible(False)
-        self._table.setFont(QFont('Courier New', 9))
+        self._table = make_table(HEADERS)
         layout.addWidget(self._table)
 
     def initializePage(self):
@@ -92,7 +71,7 @@ class PracticePage(QWizardPage):
                 row['name'], row['team'], row['manufacturer'],
                 row['best_lap'], row['gap_fmt'],
             ])
-        _fill(self._table, rows)
+        fill_table(self._table, rows)
 
         self._status.setText(
             f"✓  P1: {res.iloc[0]['name']}  —  {res.iloc[0]['best_lap']}"

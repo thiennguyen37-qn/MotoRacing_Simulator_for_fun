@@ -1,36 +1,13 @@
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
-                              QPushButton, QLabel, QTableWidget,
-                              QTableWidgetItem, QTabWidget, QWidget)
+                              QPushButton, QLabel, QTabWidget, QWidget)
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
 
 from src.simulator import run_qualifying
+from app.widgets.table_utils import make_table, fill_table
 
 HEADERS_Q  = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'BEST LAP', 'GAP']
 HEADERS_GR = ['GRID', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'BEST LAP']
-
-
-def _make_table(headers):
-    t = QTableWidget()
-    t.setColumnCount(len(headers))
-    t.setHorizontalHeaderLabels(headers)
-    t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-    t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-    t.setAlternatingRowColors(True)
-    t.verticalHeader().setVisible(False)
-    t.setFont(QFont('Courier New', 9))
-    return t
-
-
-def _fill(table, rows):
-    table.setRowCount(len(rows))
-    for r, row in enumerate(rows):
-        for c, val in enumerate(row):
-            item = QTableWidgetItem(str(val))
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            table.setItem(r, c, item)
-    table.resizeColumnsToContents()
-    table.horizontalHeader().setStretchLastSection(True)
 
 
 class QualifyingPage(QWizardPage):
@@ -61,9 +38,9 @@ class QualifyingPage(QWizardPage):
 
         # Tab widget
         self._tabs = QTabWidget()
-        self._t_q1 = _make_table(HEADERS_Q)
-        self._t_q2 = _make_table(HEADERS_Q)
-        self._t_gr = _make_table(HEADERS_GR)
+        self._t_q1 = make_table(HEADERS_Q)
+        self._t_q2 = make_table(HEADERS_Q)
+        self._t_gr = make_table(HEADERS_GR)
         self._tabs.addTab(self._t_q1, 'Q1')
         self._tabs.addTab(self._t_q2, 'Q2')
         self._tabs.addTab(self._t_gr, 'Starting Grid')
@@ -105,7 +82,7 @@ class QualifyingPage(QWizardPage):
             rows.append([f'P{pos}', f"#{row['bike_number']}", row['name'],
                          row['team'], row['manufacturer'],
                          row['best_lap'], row['gap_fmt'] + (' ' + adv_tag if adv_tag else '')])
-        _fill(self._t_q1, rows)
+        fill_table(self._t_q1, rows)
 
         self._q1_done = True
         self._btn_q2.setEnabled(True)
@@ -126,7 +103,7 @@ class QualifyingPage(QWizardPage):
             pole = ' ◀ POLE' if pos == 1 else ''
             rows.append([f'P{pos}', f"#{row['bike_number']}", row['name'] + pole,
                          row['team'], row['manufacturer'], row['best_lap'], row['gap_fmt']])
-        _fill(self._t_q2, rows)
+        fill_table(self._t_q2, rows)
 
         # Grid table (Q2 P1-P12 then Q1 NQ P13-P24)
         grid_rows = []
@@ -136,7 +113,7 @@ class QualifyingPage(QWizardPage):
         for pos, row in nq.iterrows():
             grid_rows.append([f'P{pos}', f"#{row['bike_number']}", row['name'],
                                row['team'], row['manufacturer'], row['best_lap']])
-        _fill(self._t_gr, grid_rows)
+        fill_table(self._t_gr, grid_rows)
 
         # Build grid_all_df for race notebook
         import pandas as pd

@@ -1,26 +1,11 @@
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
                               QLabel, QFrame, QListWidget, QListWidgetItem,
                               QSizePolicy)
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
 
 from app.wizard import REPORT_ROOT
-
-# ── Stat row helper ───────────────────────────────────────────────────────────
-
-def _stat(label, value):
-    row = QHBoxLayout()
-    row.setSpacing(0)
-    lbl = QLabel(label)
-    lbl.setFont(QFont('Segoe UI', 9))
-    lbl.setStyleSheet('color: #555; background: transparent; border: none;')
-    lbl.setFixedWidth(110)
-    val = QLabel(str(value))
-    val.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
-    val.setStyleSheet('color: #ddd; background: transparent; border: none;')
-    row.addWidget(lbl)
-    row.addWidget(val, 1)
-    return row
+from app.widgets.world_map import WorldMapWidget
 
 
 class CircuitPage(QWizardPage):
@@ -72,85 +57,71 @@ class CircuitPage(QWizardPage):
             item = QListWidgetItem(f"  {c['circuit_name']}  —  {c['country']}")
             self._list.addItem(item)
 
-        self._list.currentRowChanged.connect(self._refresh)
+        self._list.currentRowChanged.connect(self._on_select)
         left.addWidget(self._list)
-        main.addLayout(left, 2)
+        main.addLayout(left, 1)
 
-        # ── Right: circuit detail card ────────────────────────────────────────
+        # ── Right: world map ──────────────────────────────────────────────────
         right = QVBoxLayout()
         right.setSpacing(6)
 
-        lbl_info = QLabel('CIRCUIT INFO')
-        lbl_info.setFont(QFont('Segoe UI', 8))
-        lbl_info.setStyleSheet('color: #555; letter-spacing: 2px;')
-        right.addWidget(lbl_info)
+        lbl_map = QLabel('WORLD MAP')
+        lbl_map.setFont(QFont('Segoe UI', 8))
+        lbl_map.setStyleSheet('color: #555; letter-spacing: 2px;')
+        right.addWidget(lbl_map)
 
-        card = QFrame()
-        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        card.setStyleSheet(
-            'QFrame { background: #0e0e14; border: 1px solid #1e1e2a; border-radius: 8px; }'
+        self._map = WorldMapWidget()
+        self._map.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        right.addWidget(self._map)
+
+        # Circuit info bar below map
+        info_frame = QFrame()
+        info_frame.setStyleSheet(
+            'QFrame { background: #0e0e14; border: 1px solid #1e1e2a; border-radius: 6px; }'
+            'QLabel { background: transparent; border: none; }'
         )
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(20, 20, 20, 20)
-        cl.setSpacing(4)
+        info_row = QHBoxLayout(info_frame)
+        info_row.setContentsMargins(16, 10, 16, 10)
+        info_row.setSpacing(24)
 
-        # Circuit name (large)
-        self._name_lbl = QLabel('')
-        self._name_lbl.setFont(QFont('Segoe UI', 15, QFont.Weight.Bold))
-        self._name_lbl.setStyleSheet('color: #fff; background: transparent; border: none;')
-        self._name_lbl.setWordWrap(True)
-        cl.addWidget(self._name_lbl)
+        self._stat_labels = {}
+        for key in ['Circuit', 'Country', 'Length', 'Base Lap', 'Corners', 'Straight']:
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            k_lbl = QLabel(key.upper())
+            k_lbl.setFont(QFont('Segoe UI', 7))
+            k_lbl.setStyleSheet('color: #444; letter-spacing: 1px;')
+            v_lbl = QLabel('—')
+            v_lbl.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+            v_lbl.setStyleSheet('color: #ddd;')
+            col.addWidget(k_lbl)
+            col.addWidget(v_lbl)
+            self._stat_labels[key] = v_lbl
+            info_row.addLayout(col)
 
-        self._country_lbl = QLabel('')
-        self._country_lbl.setFont(QFont('Segoe UI', 10))
-        self._country_lbl.setStyleSheet('color: #e02840; background: transparent; border: none;')
-        cl.addWidget(self._country_lbl)
-        cl.addSpacing(12)
+        info_row.addStretch()
+        right.addWidget(info_frame)
 
-        # Red divider
-        div = QFrame()
-        div.setFixedHeight(1)
-        div.setStyleSheet('background: #1e1e2a; border: none;')
-        cl.addWidget(div)
-        cl.addSpacing(12)
-
-        # Stats — keep references to update them
-        self._stats_layout = QVBoxLayout()
-        self._stats_layout.setSpacing(10)
-        cl.addLayout(self._stats_layout)
-        cl.addStretch()
-
-        right.addWidget(card)
-        main.addLayout(right, 1)
+        main.addLayout(right, 2)
 
         # Select first item
         self._list.setCurrentRow(0)
 
-    def _refresh(self, idx):
+    def _on_select(self, idx):
         if idx < 0:
             return
         c = self._wiz.circuits_df.iloc[idx]
 
-        self._name_lbl.setText(c['circuit_name'])
-        self._country_lbl.setText(c['country'].upper())
+        # Update map
+        self._map.highlight(c['country'])
 
-        # Rebuild stats
-        while self._stats_layout.count():
-            item = self._stats_layout.takeAt(0)
-            if item.layout():
-                while item.layout().count():
-                    w = item.layout().takeAt(0).widget()
-                    if w:
-                        w.deleteLater()
-
-        stats = [
-            ('LAP LENGTH',     f"{c['lap_length_km']} km"),
-            ('BASE LAP TIME',  f"{c['base_lap_time']} s"),
-            ('CORNERS',        str(int(c['corners']))),
-            ('STRAIGHT',       f"{int(c['straight_length_m'])} m"),
-        ]
-        for label, value in stats:
-            self._stats_layout.addLayout(_stat(label, value))
+        # Update stat bar
+        self._stat_labels['Circuit'].setText(c['circuit_name'])
+        self._stat_labels['Country'].setText(c['country'])
+        self._stat_labels['Length'].setText(f"{c['lap_length_km']} km")
+        self._stat_labels['Base Lap'].setText(f"{c['base_lap_time']} s")
+        self._stat_labels['Corners'].setText(str(int(c['corners'])))
+        self._stat_labels['Straight'].setText(f"{int(c['straight_length_m'])} m")
 
     def validatePage(self):
         idx = self._list.currentRow()

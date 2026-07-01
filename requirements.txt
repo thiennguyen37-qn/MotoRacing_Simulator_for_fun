@@ -2,6 +2,9 @@
 pandas>=2.2
 numpy>=1.26
 
+# Desktop app
+PyQt6>=6.6
+
 # Jupyter environment
 notebook>=7.0
 jupyterlab>=4.0

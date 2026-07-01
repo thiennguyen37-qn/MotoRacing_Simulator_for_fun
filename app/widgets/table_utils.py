@@ -15,19 +15,19 @@ TEAM_COLOR: dict[str, QColor] = {
     'Razor Racing':            QColor('#FFBA00'),
     'Falcon Racing':           QColor('#16166B'),
     'Storm Riders':            QColor('#7B2FBE'),
-    'Phoenix Motorsport':      QColor('#FFD700'),
+    'Phoenix Motorsport':      QColor('#FFFF00'),
     'Inferno Factory':         QColor('#80FF00'),
 }
 
-# ── Manufacturer brand colours (fallback / championship manu table) ───────────
+# ── Manufacturer brand colours — mirrors each factory team's colour ───────────
 MANU_COLOR: dict[str, QColor] = {
-    'Honda':    QColor(224, 10,  25),
-    'Ducati':   QColor(110, 8,   8),
-    'Yamaha':   QColor(0,   52,  166),
-    'Kawasaki': QColor(28,  110, 5),
-    'Suzuki':   QColor(0,   38,  155),
-    'BMW':      QColor(18,  42,  105),
-    'Triumph':  QColor(40,  40,  40),
+    'Honda':    QColor('#FF0800'),
+    'Ducati':   QColor('#B31B1B'),
+    'Yamaha':   QColor('#003262'),
+    'Kawasaki': QColor(28, 110, 5),
+    'Suzuki':   QColor('#318CE7'),
+    'BMW':      QColor('#E6E6E6'),
+    'Triumph':  QColor('#282828'),
 }
 _DEFAULT_COLOR = QColor(38, 38, 58)
 _BG = (12, 12, 18)  # #0c0c12

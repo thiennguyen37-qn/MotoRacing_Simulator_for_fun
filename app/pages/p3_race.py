@@ -9,8 +9,7 @@ from app.widgets.table_utils import make_table, TEAM_COLOR, MANU_COLOR, _DEFAULT
 
 HEADERS = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'RACE TIME', 'GAP']
 
-_DNF_COLOR  = QColor(180, 55, 55)
-_TEXT_COLOR = QColor(160, 160, 180)
+_DNF_COLOR = QColor(180, 55, 55)
 
 
 def _fill(table, result_df, meta):
@@ -59,10 +58,10 @@ def _fill(table, result_df, meta):
                 item.setForeground(QBrush(_DNF_COLOR if dnf else QColor(235, 235, 248)))
                 item.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
             elif _is_time(txt):
-                item.setForeground(QBrush(_DNF_COLOR if dnf else QColor(210, 210, 228)))
+                item.setForeground(QBrush(_DNF_COLOR if dnf else QColor(235, 235, 248)))
                 item.setFont(QFont('Consolas', 10))
             else:
-                item.setForeground(QBrush(_DNF_COLOR if dnf else _TEXT_COLOR))
+                item.setForeground(QBrush(_DNF_COLOR if dnf else QColor(235, 235, 248)))
                 item.setFont(QFont('Segoe UI', 10))
 
             table.setItem(r, c, item)

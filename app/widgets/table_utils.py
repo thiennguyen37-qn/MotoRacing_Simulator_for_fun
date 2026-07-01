@@ -31,13 +31,14 @@ MANU_COLOR: dict[str, QColor] = {
 }
 _DEFAULT_COLOR = QColor(38, 38, 58)
 _BG = (12, 12, 18)  # #0c0c12
+_WHITE = QColor(235, 235, 248)
 
 
 def row_bg(color: QColor) -> QColor:
-    """Dark manufacturer-tinted row background — 40 % manufacturer + 60 % base."""
-    r = int(_BG[0] * 0.60 + color.red()   * 0.40)
-    g = int(_BG[1] * 0.60 + color.green() * 0.40)
-    b = int(_BG[2] * 0.60 + color.blue()  * 0.40)
+    """Dark manufacturer-tinted row background — 55 % manufacturer + 45 % base."""
+    r = int(_BG[0] * 0.45 + color.red()   * 0.55)
+    g = int(_BG[1] * 0.45 + color.green() * 0.55)
+    b = int(_BG[2] * 0.45 + color.blue()  * 0.55)
     return QColor(max(r, 16), max(g, 16), max(b, 20))
 
 
@@ -189,7 +190,7 @@ def fill_table(
 
             if c == 0:
                 item.setData(Qt.ItemDataRole.UserRole, color)
-                item.setForeground(QBrush(QColor(220, 220, 235)))
+                item.setForeground(QBrush(_WHITE))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
                 item.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
 
@@ -199,15 +200,15 @@ def fill_table(
                 item.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
 
             elif name_col_idx is not None and c == name_col_idx:
-                item.setForeground(QBrush(QColor(235, 235, 248)))
+                item.setForeground(QBrush(_WHITE))
                 item.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
 
             elif _is_time(txt):
-                item.setForeground(QBrush(QColor(210, 210, 228)))
+                item.setForeground(QBrush(_WHITE))
                 item.setFont(QFont('Consolas', 10))
 
             else:
-                item.setForeground(QBrush(QColor(160, 160, 180)))
+                item.setForeground(QBrush(_WHITE))
                 item.setFont(QFont('Segoe UI', 10))
 
             table.setItem(r, c, item)

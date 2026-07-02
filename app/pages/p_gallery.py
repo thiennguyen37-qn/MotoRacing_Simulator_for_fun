@@ -1,14 +1,27 @@
 from pathlib import Path
 from PyQt6.QtWidgets import (QWizardPage, QHBoxLayout, QVBoxLayout,
                               QFrame, QLabel, QSizePolicy, QScrollArea,
-                              QWidget, QStackedWidget, QPushButton)
+                              QWidget, QStackedWidget)
 from PyQt6.QtGui import (QFont, QPixmap, QPainter, QColor, QPen,
                           QPainterPath, QLinearGradient)
 from PyQt6.QtCore import Qt, QRectF, QRect, pyqtSignal
 
-_BG     = Path(__file__).parent.parent.parent / 'images' / 'homepage.jpg'
+_BG        = Path(__file__).parent.parent.parent / 'images' / 'homepage.jpg'
+_BIKES_DIR = Path(__file__).parent.parent.parent / 'images' / 'bikes'
 _BOX_W  = 340
 _RADIUS = 14
+
+_BIKE_IMAGE: dict[str, str] = {
+    'Ducati Factory Racing':   'Ducati_Factory.png',
+    'Honda Factory Racing':    'Honda_Factory.png',
+    'Yamaha Factory Racing':   'Yamaha_Factory.png',
+    'Suzuki Factory Racing':   'Suzuki_Factory.png',
+    'Kawasaki Factory Racing': 'Kawasaki_Factory.png',
+    'BMW Factory Racing':      'BMW_Factory.png',
+    'Triumph Factory Racing':  'Triumph_Factory.png',
+    'Razor Racing':            'Ducati_Razor.png',
+    'Storm Riders':            'Yamaha_Storm.png',
+}
 
 STATS = [
     ('rider_braking',   'Braking',          '#2196F3'),
@@ -20,11 +33,11 @@ STATS = [
 ]
 
 BIKE_STATS = [
-    ('top_speed',      'Top Speed',    '#FF9800'),
-    ('acceleration',   'Acceleration', '#E91E63'),
-    ('bike_braking',   'Braking',      '#e02840'),
+    ('top_speed',      'Top Speed',    '#2196F3'),
+    ('acceleration',   'Acceleration', '#2196F3'),
+    ('bike_braking',   'Braking',      '#2196F3'),
     ('bike_cornering', 'Cornering',    '#2196F3'),
-    ('stability',      'Stability',    '#4CAF50'),
+    ('stability',      'Stability',    '#2196F3'),
 ]
 
 
@@ -36,12 +49,11 @@ class _Card(QFrame):
     def __init__(self, title: str, subtitle: str, accent_hex: str):
         super().__init__()
         self._accent  = QColor(accent_hex)
-        self._hovered = False
+        self._focused = False
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setFixedWidth(_BOX_W)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         pl = QVBoxLayout(self)
         pl.setContentsMargins(32, 32, 32, 36)
@@ -65,27 +77,25 @@ class _Card(QFrame):
         lbl_sub.setWordWrap(True)
         pl.addWidget(lbl_sub)
 
+    def set_focused(self, v: bool):
+        self._focused = v
+        self.update()
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect().adjusted(1, 1, -1, -1))
         path = QPainterPath()
         path.addRoundedRect(rect, _RADIUS, _RADIUS)
-        p.fillPath(path, QColor(8, 8, 18, 230 if self._hovered else 210))
+        p.fillPath(path, QColor(8, 8, 18, 230 if self._focused else 210))
         border = QColor(self._accent)
-        border.setAlpha(160 if self._hovered else 90)
-        p.setPen(QPen(border, 1.5 if self._hovered else 1.0))
+        if self._focused:
+            border.setAlpha(220)
+            p.setPen(QPen(border, 2.0))
+        else:
+            border.setAlpha(90)
+            p.setPen(QPen(border, 1.0))
         p.drawPath(path)
-
-    def enterEvent(self, e):
-        self._hovered = True
-        self.update()
-        super().enterEvent(e)
-
-    def leaveEvent(self, e):
-        self._hovered = False
-        self.update()
-        super().leaveEvent(e)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -203,8 +213,8 @@ def _make_scroll_area() -> QScrollArea:
     return sa
 
 
-def _make_left_panel(label: str, accent: str) -> tuple[QWidget, QVBoxLayout]:
-    """Returns (outer_widget, list_layout) for the left 3-column."""
+def _make_left_panel(label: str, accent: str) -> tuple[QWidget, QVBoxLayout, QScrollArea]:
+    """Returns (outer_widget, list_layout, scroll_area) for the left 3-column."""
     outer = QWidget()
     outer.setAutoFillBackground(False)
     outer.setStyleSheet('background: transparent;')
@@ -239,7 +249,7 @@ def _make_left_panel(label: str, accent: str) -> tuple[QWidget, QVBoxLayout]:
 
     scroll.setWidget(list_cont)
     lo.addWidget(scroll, 1)
-    return outer, list_lay
+    return outer, list_lay, scroll
 
 
 def _divider() -> QFrame:
@@ -270,7 +280,6 @@ class _RiderItem(QWidget):
             min(team_color.blue()  + 80, 255),
         )
         self._selected = False
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(50)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
@@ -303,20 +312,10 @@ class _RiderItem(QWidget):
         if self._selected:
             p.fillRect(0, 0, w, h, QColor(20, 20, 36))
             p.fillRect(0, 0, 3, h, self._tc)
-        elif self.underMouse():
-            p.fillRect(0, 0, w, h, QColor(14, 14, 26))
         else:
             p.fillRect(0, 0, w, h, QColor(7, 7, 16))
         p.setPen(QPen(QColor(18, 18, 30)))
         p.drawLine(0, h - 1, w, h - 1)
-
-    def enterEvent(self, e):
-        self.update()
-        super().enterEvent(e)
-
-    def leaveEvent(self, e):
-        self.update()
-        super().leaveEvent(e)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -334,7 +333,6 @@ class _TeamItem(QWidget):
         self._team     = team_name
         self._tc       = team_color
         self._selected = False
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(58)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
@@ -369,20 +367,10 @@ class _TeamItem(QWidget):
         if self._selected:
             p.fillRect(0, 0, w, h, QColor(20, 20, 36))
             p.fillRect(0, 0, 3, h, self._tc)
-        elif self.underMouse():
-            p.fillRect(0, 0, w, h, QColor(14, 14, 26))
         else:
             p.fillRect(0, 0, w, h, QColor(7, 7, 16))
         p.setPen(QPen(QColor(18, 18, 30)))
         p.drawLine(0, h - 1, w, h - 1)
-
-    def enterEvent(self, e):
-        self.update()
-        super().enterEvent(e)
-
-    def leaveEvent(self, e):
-        self.update()
-        super().leaveEvent(e)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -510,76 +498,91 @@ class _TeamDetail(QWidget):
             min(team_color.blue()  + 60, 255),
         )
 
-        # Team name
+        # ── Header (full width) ───────────────────────────────────────────
         n = QLabel(team_name.upper())
         n.setFont(QFont('Segoe UI', 24, QFont.Weight.Bold))
         n.setStyleSheet(f'color: {tc_lt.name()}; background: transparent; border: none;')
         cl.addWidget(n)
         cl.addSpacing(6)
 
-        # Manufacturer · status
         status_str = 'Factory Team' if team_status == 'factory' else 'Satellite Team'
         t = QLabel(f"{manufacturer}  ·  {status_str}")
         t.setFont(QFont('Segoe UI', 13))
         t.setStyleSheet('color: #ffffff; background: transparent; border: none;')
         cl.addWidget(t)
-        cl.addSpacing(30)
-
+        cl.addSpacing(22)
         cl.addWidget(_divider())
         cl.addSpacing(22)
-        cl.addWidget(_section_label('RIDERS'))
-        cl.addSpacing(14)
 
-        # Rider entries wrapped in QWidget for clean reload
-        riders_w = QWidget()
-        riders_w.setStyleSheet('background: transparent;')
-        riders_lay = QVBoxLayout(riders_w)
-        riders_lay.setContentsMargins(0, 0, 0, 0)
-        riders_lay.setSpacing(10)
+        # ── Two-column body ───────────────────────────────────────────────
+        body = QWidget()
+        body.setStyleSheet('background: transparent;')
+        body_lay = QHBoxLayout(body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(36)
+
+        # LEFT: bike image + riders
+        left = QWidget()
+        left.setStyleSheet('background: transparent;')
+        left_lay = QVBoxLayout(left)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(0)
+
+        img_file = _BIKE_IMAGE.get(team_name)
+        if img_file:
+            pix = QPixmap(str(_BIKES_DIR / img_file))
+            if not pix.isNull():
+                pix = pix.scaledToHeight(180, Qt.TransformationMode.SmoothTransformation)
+                img_lbl = QLabel()
+                img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                img_lbl.setStyleSheet('background: transparent; border: none;')
+                img_lbl.setPixmap(pix)
+                left_lay.addWidget(img_lbl)
+                left_lay.addSpacing(20)
+
+        left_lay.addWidget(_section_label('RIDERS'))
+        left_lay.addSpacing(12)
         for r in sorted(riders, key=lambda x: x['bike_number']):
             row_w = QWidget()
             row_w.setStyleSheet('background: transparent;')
             row_lay = QHBoxLayout(row_w)
             row_lay.setContentsMargins(0, 0, 0, 0)
-            row_lay.setSpacing(14)
-
+            row_lay.setSpacing(10)
             num = QLabel(f'#{r["bike_number"]}')
-            num.setFont(QFont('Segoe UI', 13, QFont.Weight.Bold))
-            num.setFixedWidth(48)
+            num.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
+            num.setFixedWidth(40)
             num.setStyleSheet(f'color: {tc_lt.name()}; background: transparent; border: none;')
             row_lay.addWidget(num)
-
             nm = QLabel(r['name'].upper())
-            nm.setFont(QFont('Segoe UI', 12, QFont.Weight.Bold))
+            nm.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
             nm.setStyleSheet('color: #ccccdd; background: transparent; border: none;')
             row_lay.addWidget(nm, 1)
-            riders_lay.addWidget(row_w)
+            left_lay.addWidget(row_w)
+            left_lay.addSpacing(6)
+        left_lay.addStretch(1)
 
-        cl.addWidget(riders_w)
-        cl.addSpacing(30)
+        # RIGHT: bike specs + power rating
+        right = QWidget()
+        right.setStyleSheet('background: transparent;')
+        right_lay = QVBoxLayout(right)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(0)
 
-        cl.addWidget(_divider())
-        cl.addSpacing(22)
-        cl.addWidget(_section_label('BIKE SPECS'))
-        cl.addSpacing(18)
-
+        right_lay.addWidget(_section_label('BIKE SPECS'))
+        right_lay.addSpacing(16)
         for col_name, label, color in BIKE_STATS:
-            cl.addWidget(_StatBar(label, int(bike_row.get(col_name, 0)), color))
-            cl.addSpacing(10)
+            right_lay.addWidget(_StatBar(label, int(bike_row.get(col_name, 0)), color))
+            right_lay.addSpacing(10)
+        right_lay.addSpacing(22)
+        right_lay.addWidget(_divider())
+        right_lay.addSpacing(18)
+        avg = sum(bike_row.get(c, 0) for c, _, _ in BIKE_STATS) / len(BIKE_STATS)
+        right_lay.addWidget(_PowerBar(avg))
+        right_lay.addStretch(1)
 
-        cl.addSpacing(28)
-        cl.addWidget(_divider())
-        cl.addSpacing(20)
-
-        # Team power = average of all riders' average rider stats
-        if riders:
-            avg = sum(
-                sum(r.get(c, 0) for c, _, _ in STATS) / len(STATS)
-                for r in riders
-            ) / len(riders)
-        else:
-            avg = 0.0
-        cl.addWidget(_PowerBar(avg))
+        body_lay.addWidget(left, 4)
+        body_lay.addWidget(right, 6)
+        cl.addWidget(body)
         cl.addSpacing(40)
 
 
@@ -598,7 +601,7 @@ class _RidersView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        left_outer, self._list_lay = _make_left_panel('RIDERS', '#e02840')
+        left_outer, self._list_lay, self._left_scroll = _make_left_panel('RIDERS', '#e02840')
         root.addWidget(left_outer, 3)
 
         vd = QFrame(); vd.setFixedWidth(1)
@@ -633,6 +636,15 @@ class _RidersView(QWidget):
         row_s = self._wiz.df[self._wiz.df['name'] == name].iloc[0]
         self._detail.load(row_s.to_dict())
 
+    def move_selection(self, forward: bool):
+        names = list(self._items.keys())
+        if not names:
+            return
+        idx = names.index(self._current) if self._current in names else -1
+        new_name = names[(idx + (1 if forward else -1)) % len(names)]
+        self._on_select(new_name)
+        self._left_scroll.ensureWidgetVisible(self._items[new_name])
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(5, 5, 14, 218))
@@ -653,7 +665,7 @@ class _TeamsView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        left_outer, self._list_lay = _make_left_panel('TEAMS', '#318CE7')
+        left_outer, self._list_lay, self._left_scroll = _make_left_panel('TEAMS', '#318CE7')
         root.addWidget(left_outer, 3)
 
         vd = QFrame(); vd.setFixedWidth(1)
@@ -670,7 +682,10 @@ class _TeamsView(QWidget):
             return
         from app.widgets.table_utils import TEAM_COLOR, _DEFAULT_COLOR
         df = self._wiz.df
-        team_names = sorted(df['team'].unique())
+        def _team_sort_key(t):
+            row = df[df['team'] == t].iloc[0]
+            return (row.get('manufacturer', ''), row.get('team_status', '') != 'factory', t)
+        team_names = sorted(df['team'].unique(), key=_team_sort_key)
         for team_name in team_names:
             first_row = df[df['team'] == team_name].iloc[0]
             tc   = TEAM_COLOR.get(team_name, _DEFAULT_COLOR)
@@ -705,6 +720,15 @@ class _TeamsView(QWidget):
             team_color  = tc,
         )
 
+    def move_selection(self, forward: bool):
+        teams = list(self._items.keys())
+        if not teams:
+            return
+        idx = teams.index(self._current) if self._current in teams else -1
+        new_team = teams[(idx + (1 if forward else -1)) % len(teams)]
+        self._on_select(new_team)
+        self._left_scroll.ensureWidgetVisible(self._items[new_team])
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(5, 5, 14, 218))
@@ -712,38 +736,6 @@ class _TeamsView(QWidget):
 
 # ── Gallery page ──────────────────────────────────────────────────────────────
 
-def _split_page(view_widget: QWidget, back_slot) -> QWidget:
-    """Wraps a split view with a ← Gallery top bar."""
-    w = QWidget()
-    w.setAutoFillBackground(False)
-    w.setStyleSheet('background: transparent;')
-    lay = QVBoxLayout(w)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(0)
-
-    top = QFrame()
-    top.setFixedHeight(46)
-    top.setAutoFillBackground(False)
-    top.setStyleSheet('background: transparent; border: none;')
-    tl = QHBoxLayout(top)
-    tl.setContentsMargins(16, 0, 0, 0)
-    btn = QPushButton('← Gallery')
-    btn.setFont(QFont('Segoe UI', 9))
-    btn.setStyleSheet(
-        'QPushButton { background: transparent; color: #444455; border: none; padding: 4px 8px; }'
-        'QPushButton:hover { color: #aaaacc; }'
-    )
-    btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    btn.clicked.connect(back_slot)
-    tl.addWidget(btn)
-    tl.addStretch(1)
-    lay.addWidget(top)
-
-    sep = QFrame(); sep.setFixedHeight(1)
-    sep.setStyleSheet('background: #0e0e1e; border: none;')
-    lay.addWidget(sep)
-    lay.addWidget(view_widget, 1)
-    return w
 
 
 class GalleryPage(QWizardPage):
@@ -782,19 +774,46 @@ class GalleryPage(QWizardPage):
 
         # ── Index 1: riders split view ────────────────────────────────────────
         self._riders_view = _RidersView(wiz)
-        self._stack.addWidget(
-            _split_page(self._riders_view, lambda: self._stack.setCurrentIndex(0))
-        )                                                    # index 1
+        self._stack.addWidget(self._riders_view)             # index 1
 
         # ── Index 2: teams split view ─────────────────────────────────────────
         self._teams_view = _TeamsView(wiz)
-        self._stack.addWidget(
-            _split_page(self._teams_view, lambda: self._stack.setCurrentIndex(0))
-        )                                                    # index 2
+        self._stack.addWidget(self._teams_view)              # index 2
+
+        self._card_focus = 0  # 0 = Riders, 1 = Teams
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self._stack)
+
+    def initializePage(self):
+        self._stack.setCurrentIndex(0)
+        self._card_focus = 0
+        self._card_riders.set_focused(True)
+        self._card_teams.set_focused(False)
+        super().initializePage()
+
+    def handle_key(self, key: int) -> bool:
+        idx = self._stack.currentIndex()
+        if idx == 0:
+            if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+                self._card_focus = 1 - self._card_focus
+                self._card_riders.set_focused(self._card_focus == 0)
+                self._card_teams.set_focused(self._card_focus == 1)
+                return True
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+                (self._open_riders if self._card_focus == 0 else self._open_teams)()
+                return True
+        elif idx in (1, 2):
+            if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                view = self._riders_view if idx == 1 else self._teams_view
+                view.move_selection(key == Qt.Key.Key_Down)
+                return True
+            if key in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace):
+                self._stack.setCurrentIndex(0)
+                return True
+            return True  # consume all other keys to prevent falling through
+        return False
 
     def _open_riders(self):
         self._riders_view.populate()
@@ -821,6 +840,10 @@ class GalleryPage(QWizardPage):
     def resizeEvent(self, event):
         self._rescale()
         super().resizeEvent(event)
+
+    def initializePage(self):
+        self._stack.setCurrentIndex(0)
+        super().initializePage()
 
     def showEvent(self, event):
         self._rescale()

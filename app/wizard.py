@@ -1,6 +1,6 @@
 from pathlib import Path
-from PyQt6.QtWidgets import QWizard
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWizard, QApplication, QDialog
+from PyQt6.QtCore import Qt, QEvent
 
 from src.loader import load_riders, load_circuits
 
@@ -72,6 +72,12 @@ class MotoWizard(QWizard):
         self.currentIdChanged.connect(self._on_page_changed)
         self._on_page_changed(self.ID_HOME)   # currentIdChanged doesn't fire on startup
 
+        self.setCursor(Qt.CursorShape.BlankCursor)
+        QApplication.instance().installEventFilter(self)
+
+    def reject(self):
+        pass  # prevent Escape from closing the wizard
+
     def accept(self):
         if self.mode == 'random':
             # Finish in Random Race → go back to homepage, not exit
@@ -80,20 +86,39 @@ class MotoWizard(QWizard):
         else:
             super().accept()
 
-    def _on_page_changed(self, page_id):
-        if page_id == self.ID_HOME:
-            self.setButtonLayout([])
-        elif page_id == self.ID_GALLERY:
-            self.setButtonLayout([
-                QWizard.WizardButton.BackButton,
-                QWizard.WizardButton.Stretch,
-                QWizard.WizardButton.CancelButton,
-            ])
+    def eventFilter(self, obj, event):
+        if event.type() in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.MouseMove,
+            QEvent.Type.Wheel,
+        ):
+            return True
+        if event.type() == QEvent.Type.KeyPress and self.isActiveWindow():
+            page = self.currentPage()
+            if hasattr(page, 'handle_key') and page.handle_key(event.key()):
+                return True
+            k = event.key()
+            if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if page and page.isComplete():
+                    if page.nextId() == -1:
+                        self.accept()
+                    else:
+                        self.next()
+                    return True
+            elif k in (Qt.Key.Key_Backspace, Qt.Key.Key_Escape):
+                if self.currentId() != self.startId():
+                    self.back()
+                    return True
+        return False
+
+    def closeEvent(self, event):
+        from app.pages.p_home import ExitDialog
+        if ExitDialog(self).exec() == QDialog.DialogCode.Accepted:
+            event.accept()
         else:
-            self.setButtonLayout([
-                QWizard.WizardButton.BackButton,
-                QWizard.WizardButton.Stretch,
-                QWizard.WizardButton.CancelButton,
-                QWizard.WizardButton.NextButton,
-                QWizard.WizardButton.FinishButton,
-            ])
+            event.ignore()
+
+    def _on_page_changed(self, page_id):
+        self.setButtonLayout([])

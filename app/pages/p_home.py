@@ -38,29 +38,55 @@ class ExitDialog(QDialog):
         btns = QHBoxLayout()
         btns.setSpacing(12)
 
-        btn_cancel = QPushButton('Cancel')
-        btn_cancel.setFixedHeight(38)
-        btn_cancel.setFont(QFont('Segoe UI', 10))
-        btn_cancel.setStyleSheet(
-            'QPushButton { background: #1e1e2a; color: #aaa; border: 1px solid #333; border-radius: 6px; }'
-            'QPushButton:hover { background: #2a2a3a; color: #fff; }'
-        )
-        btn_cancel.clicked.connect(self.reject)
+        self._btn_cancel = QPushButton('Cancel')
+        self._btn_cancel.setFixedHeight(38)
+        self._btn_cancel.setFont(QFont('Segoe UI', 10))
+        self._btn_cancel.setAutoDefault(False)
+        self._btn_cancel.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._btn_cancel.clicked.connect(self.reject)
 
-        btn_yes = QPushButton('Yes, Exit')
-        btn_yes.setFixedHeight(38)
-        btn_yes.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
-        btn_yes.setStyleSheet(
-            'QPushButton { background: #e02840; color: #fff; border: none; border-radius: 6px; }'
-            'QPushButton:hover { background: #ff3050; }'
-            'QPushButton:pressed { background: #b01e30; }'
-        )
-        btn_yes.clicked.connect(self.accept)
+        self._btn_yes = QPushButton('Yes, Exit')
+        self._btn_yes.setFixedHeight(38)
+        self._btn_yes.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
+        self._btn_yes.setAutoDefault(False)
+        self._btn_yes.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._btn_yes.clicked.connect(self.accept)
 
-        btns.addWidget(btn_cancel)
-        btns.addWidget(btn_yes)
+        btns.addWidget(self._btn_cancel)
+        btns.addWidget(self._btn_yes)
         cl.addLayout(btns)
         root.addWidget(card)
+
+        self._yes_focused = True
+        self._update_focus()
+
+    def _update_focus(self):
+        if self._yes_focused:
+            self._btn_yes.setStyleSheet(
+                'QPushButton { background: #e02840; color: #fff;'
+                ' border: 2px solid #ff6080; border-radius: 6px; }')
+            self._btn_cancel.setStyleSheet(
+                'QPushButton { background: #1a1a24; color: #555;'
+                ' border: 1px solid #222; border-radius: 6px; }')
+        else:
+            self._btn_yes.setStyleSheet(
+                'QPushButton { background: #2a0810; color: #884455;'
+                ' border: none; border-radius: 6px; }')
+            self._btn_cancel.setStyleSheet(
+                'QPushButton { background: #2a2a3a; color: #fff;'
+                ' border: 2px solid #6666aa; border-radius: 6px; }')
+
+    def keyPressEvent(self, event):
+        k = event.key()
+        if k in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            self._yes_focused = not self._yes_focused
+            self._update_focus()
+        elif k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.accept() if self._yes_focused else self.reject()
+        elif k == Qt.Key.Key_Escape:
+            self.reject()
+        else:
+            super().keyPressEvent(event)
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -91,9 +117,9 @@ class ModeBar(QFrame):
 
     def __init__(self, title, subtitle, danger=False):
         super().__init__()
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._selected = False
         self._danger   = danger
+        self._focused  = False
         self._apply(False, False)
 
         col = QVBoxLayout(self)
@@ -143,18 +169,19 @@ class ModeBar(QFrame):
             else 'background: #2a2a2a; border-radius: 2px;'
         )
 
-    def enterEvent(self, e):
+    def set_focused(self, v: bool):
+        self._focused = v
         if not self._selected:
-            self._apply(False, True)
-            accent_col = '#e02840' if self._danger else '#882020'
-            self._accent.setStyleSheet(f'background: {accent_col}; border-radius: 2px;')
-        super().enterEvent(e)
-
-    def leaveEvent(self, e):
-        if not self._selected:
-            self._apply(False, False)
-            self._accent.setStyleSheet('background: #2a2a2a; border-radius: 2px;')
-        super().leaveEvent(e)
+            if v:
+                self.setStyleSheet(self._SS.format(
+                    bg='rgba(255,255,255,8)', border='#555566', txt='#ddddee'))
+            else:
+                self._apply(False, False)
+            self._accent.setStyleSheet(
+                'background: #e02840; border-radius: 2px;' if v
+                else 'background: #2a2a2a; border-radius: 2px;'
+            )
+        self._sub.setVisible(v or self._selected)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -212,6 +239,10 @@ class HomePage(QWizardPage):
         self._bar_c = ModeBar('CHAMPIONSHIP', 'All 13 rounds — full season')
         self._bar_g = ModeBar('GALLERY',      'Browse rider and team profiles')
         self._bar_x = ModeBar('EXIT',         'Close the application', danger=True)
+        self._bars  = [self._bar_r, self._bar_c, self._bar_g, self._bar_x]
+        self._modes = ['random', 'championship', 'gallery', 'exit']
+        self._focus_idx = 0
+
         self._bar_r.clicked.connect(lambda: self._select('random'))
         self._bar_c.clicked.connect(lambda: self._select('championship'))
         self._bar_g.clicked.connect(lambda: self._select('gallery'))
@@ -226,18 +257,6 @@ class HomePage(QWizardPage):
         pl.addWidget(self._bar_x)
 
         pl.addStretch(1)
-
-        self._btn_continue = QPushButton('Continue  →')
-        self._btn_continue.setFixedHeight(42)
-        self._btn_continue.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
-        self._btn_continue.setStyleSheet("""
-            QPushButton { background-color: #e02840; color: #ffffff; border: none; border-radius: 6px; }
-            QPushButton:hover { background-color: #ff3050; }
-            QPushButton:pressed { background-color: #b01e30; }
-        """)
-        self._btn_continue.setVisible(False)
-        self._btn_continue.clicked.connect(self._wiz.next)
-        pl.addWidget(self._btn_continue)
 
         main.addWidget(panel)
 
@@ -280,10 +299,28 @@ class HomePage(QWizardPage):
         wiz.mode          = None
         wiz.circuit_index = 0
         wiz.all_race_pts  = []
-        for bar in (self._bar_r, self._bar_c, self._bar_g, self._bar_x):
+        for bar in self._bars:
             bar.set_selected(False)
-        self._btn_continue.setVisible(False)
+            bar.set_focused(False)
         self.completeChanged.emit()
+        self._focus_idx = 0
+        self._bars[0].set_focused(True)
+
+    def handle_key(self, key: int) -> bool:
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self._bars[self._focus_idx].set_focused(False)
+            self._focus_idx = (self._focus_idx + (-1 if key == Qt.Key.Key_Up else 1)) % len(self._bars)
+            self._bars[self._focus_idx].set_focused(True)
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            mode = self._modes[self._focus_idx]
+            if mode == 'exit':
+                self._confirm_exit()
+            else:
+                self._wiz.mode = mode
+                self._wiz.next()
+            return True
+        return False
 
     def _select(self, mode):
         self._wiz.mode = mode
@@ -291,8 +328,12 @@ class HomePage(QWizardPage):
         self._bar_c.set_selected(mode == 'championship')
         self._bar_g.set_selected(mode == 'gallery')
         self._bar_x.set_selected(False)
-        self._btn_continue.setVisible(True)
         self.completeChanged.emit()
+        # sync keyboard focus to the clicked/selected bar
+        for b in self._bars:
+            b.set_focused(False)
+        self._focus_idx = self._modes.index(mode)
+        self._bars[self._focus_idx].set_focused(True)
 
     def _confirm_exit(self):
         if ExitDialog(self).exec() == QDialog.DialogCode.Accepted:

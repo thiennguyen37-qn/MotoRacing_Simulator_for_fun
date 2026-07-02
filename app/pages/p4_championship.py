@@ -80,6 +80,13 @@ class ChampionshipPage(QWizardPage):
             wiz.circuit_index += 1
         return True
 
+    def handle_key(self, key: int) -> bool:
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            bar = self._tabs.currentWidget().verticalScrollBar()
+            bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
+            return True
+        return False
+
     def nextId(self):
         wiz = self._wiz
         if wiz.mode == 'championship' and wiz.circuit_index < len(wiz.circuits_df) - 1:

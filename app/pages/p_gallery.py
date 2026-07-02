@@ -6,7 +6,8 @@ from PyQt6.QtGui import (QFont, QPixmap, QPainter, QColor, QPen,
                           QPainterPath, QLinearGradient)
 from PyQt6.QtCore import Qt, QRectF, QRect, pyqtSignal
 
-_BG        = Path(__file__).parent.parent.parent / 'images' / 'homepage.jpg'
+from app.widgets.video_bg import VideoBackground
+
 _BIKES_DIR = Path(__file__).parent.parent.parent / 'images' / 'bikes'
 _BOX_W  = 340
 _RADIUS = 14
@@ -21,6 +22,9 @@ _BIKE_IMAGE: dict[str, str] = {
     'Triumph Factory Racing':  'Triumph_Factory.png',
     'Razor Racing':            'Ducati_Razor.png',
     'Storm Riders':            'Yamaha_Storm.png',
+    'Falcon Racing':           'BMW_Falcon.png',
+    'Phoenix Motorsport':      'Triumph_Phoenix.png',
+    'Inferno Factory':         'Honda_Inferno.png',
 }
 
 STATS = [
@@ -741,9 +745,9 @@ class _TeamsView(QWidget):
 class GalleryPage(QWizardPage):
     def __init__(self, wiz):
         super().__init__()
-        self._wiz       = wiz
-        self._bg_pixmap = QPixmap(str(_BG)) if _BG.exists() else QPixmap()
-        self._bg_cache  = QPixmap()
+        self._wiz = wiz
+        self._vbg = VideoBackground.instance()
+        self._vbg.frame_ready.connect(self._on_bg_frame)
         self.setTitle('')
         self.setSubTitle('')
 
@@ -825,38 +829,14 @@ class GalleryPage(QWizardPage):
 
     # ── Background painting ───────────────────────────────────────────────────
 
-    def _rescale(self):
-        if self._bg_pixmap.isNull() or self.width() < 2 or self.height() < 2:
-            return
-        dpr = self.devicePixelRatio()
-        self._bg_cache = self._bg_pixmap.scaled(
-            int(self.width() * dpr), int(self.height() * dpr),
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self._bg_cache.setDevicePixelRatio(dpr)
-        self.update()
-
-    def resizeEvent(self, event):
-        self._rescale()
-        super().resizeEvent(event)
-
-    def initializePage(self):
-        self._stack.setCurrentIndex(0)
-        super().initializePage()
-
-    def showEvent(self, event):
-        self._rescale()
-        super().showEvent(event)
+    def _on_bg_frame(self):
+        if self.isVisible():
+            self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0))
-        if not self._bg_cache.isNull():
-            dpr = self.devicePixelRatio()
-            x = int((self.width()  - self._bg_cache.width()  / dpr) / 2)
-            y = int((self.height() - self._bg_cache.height() / dpr) / 2)
-            p.drawPixmap(x, y, self._bg_cache)
+        self._vbg.paint(p, self)
 
     def nextId(self):
         return -1

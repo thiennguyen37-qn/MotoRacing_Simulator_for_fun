@@ -18,3 +18,8 @@ venv/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Music (copyrighted — keep local only; drop files into audio/music/)
+audio/music/*.mp3
+audio/music/*.ogg
+audio/music/*.wav

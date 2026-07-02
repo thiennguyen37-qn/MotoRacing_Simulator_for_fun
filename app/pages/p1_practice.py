@@ -32,6 +32,13 @@ class PracticePage(QWizardPage):
         self._table = make_table(HEADERS)
         layout.addWidget(self._table)
 
+    def handle_key(self, key: int) -> bool:
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            bar = self._table.verticalScrollBar()
+            bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
+            return True
+        return False
+
     def initializePage(self):
         wiz = self._wiz
         # Championship: auto-select current circuit from index

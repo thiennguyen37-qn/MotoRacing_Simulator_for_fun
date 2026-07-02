@@ -106,6 +106,13 @@ class RacePage(QWizardPage):
         self._tabs.addTab(self._t_r2, 'Race 2')
         layout.addWidget(self._tabs)
 
+    def handle_key(self, key: int) -> bool:
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            bar = self._tabs.currentWidget().verticalScrollBar()
+            bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
+            return True
+        return False
+
     def initializePage(self):
         self._r1_done   = False
         self._both_done = False

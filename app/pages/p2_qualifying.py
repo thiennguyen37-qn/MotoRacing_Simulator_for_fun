@@ -52,6 +52,13 @@ class QualifyingPage(QWizardPage):
         self._q2_advance = None
         self._q1_nq = None
 
+    def handle_key(self, key: int) -> bool:
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            bar = self._tabs.currentWidget().verticalScrollBar()
+            bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
+            return True
+        return False
+
     def initializePage(self):
         self._q1_done = False
         self._q2_done = False

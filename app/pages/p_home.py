@@ -1,9 +1,10 @@
-from pathlib import Path
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
                               QLabel, QFrame, QSizePolicy, QApplication,
                               QPushButton, QDialog)
-from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor
+from PyQt6.QtGui import QFont, QPainter, QColor
 from PyQt6.QtCore import Qt, pyqtSignal
+
+from app.widgets.video_bg import VideoBackground
 
 
 # ── Exit confirmation dialog ──────────────────────────────────────────────────
@@ -96,7 +97,6 @@ class ExitDialog(QDialog):
         p.drawRoundedRect(self.rect(), 12, 12)
 
 
-_BG     = Path(__file__).parent.parent.parent / 'images' / 'homepage.jpg'
 PANEL_W = 390
 
 
@@ -197,8 +197,8 @@ class HomePage(QWizardPage):
         self._wiz = wiz
         self.setTitle('')
         self.setSubTitle('')
-        self._bg_pixmap = QPixmap(str(_BG)) if _BG.exists() else QPixmap()
-        self._bg_cache  = QPixmap()
+        self._vbg = VideoBackground.instance()
+        self._vbg.frame_ready.connect(self._on_bg_frame)
 
         # ── Right navigation panel ────────────────────────────────────────────
         main = QHBoxLayout(self)
@@ -238,14 +238,16 @@ class HomePage(QWizardPage):
         self._bar_r = ModeBar('RANDOM RACE',  'Pick any circuit for a single weekend')
         self._bar_c = ModeBar('CHAMPIONSHIP', 'All 13 rounds — full season')
         self._bar_g = ModeBar('GALLERY',      'Browse rider and team profiles')
+        self._bar_s = ModeBar('SOUNDTRACK',   'Browse and play music tracks')
         self._bar_x = ModeBar('EXIT',         'Close the application', danger=True)
-        self._bars  = [self._bar_r, self._bar_c, self._bar_g, self._bar_x]
-        self._modes = ['random', 'championship', 'gallery', 'exit']
+        self._bars  = [self._bar_r, self._bar_c, self._bar_g, self._bar_s, self._bar_x]
+        self._modes = ['random', 'championship', 'gallery', 'soundtrack', 'exit']
         self._focus_idx = 0
 
         self._bar_r.clicked.connect(lambda: self._select('random'))
         self._bar_c.clicked.connect(lambda: self._select('championship'))
         self._bar_g.clicked.connect(lambda: self._select('gallery'))
+        self._bar_s.clicked.connect(lambda: self._select('soundtrack'))
         self._bar_x.clicked.connect(self._confirm_exit)
 
         pl.addWidget(self._bar_r)
@@ -254,43 +256,24 @@ class HomePage(QWizardPage):
         pl.addSpacing(10)
         pl.addWidget(self._bar_g)
         pl.addSpacing(10)
+        pl.addWidget(self._bar_s)
+        pl.addSpacing(10)
         pl.addWidget(self._bar_x)
 
         pl.addStretch(1)
 
         main.addWidget(panel)
 
-    # ── Background image ──────────────────────────────────────────────────────
+    # ── Background ────────────────────────────────────────────────────────────
 
-    def _rescale(self):
-        if self._bg_pixmap.isNull() or self.width() < 2 or self.height() < 2:
-            return
-        dpr = self.devicePixelRatio()
-        self._bg_cache = self._bg_pixmap.scaled(
-            int(self.width()  * dpr),
-            int(self.height() * dpr),
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self._bg_cache.setDevicePixelRatio(dpr)
-        self.update()
-
-    def resizeEvent(self, event):
-        self._rescale()
-        super().resizeEvent(event)
-
-    def showEvent(self, event):
-        self._rescale()
-        super().showEvent(event)
+    def _on_bg_frame(self):
+        if self.isVisible():
+            self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0))
-        if not self._bg_cache.isNull():
-            dpr = self.devicePixelRatio()
-            x   = int((self.width()  - self._bg_cache.width()  / dpr) / 2)
-            y   = int((self.height() - self._bg_cache.height() / dpr) / 2)
-            p.drawPixmap(x, y, self._bg_cache)
+        self._vbg.paint(p, self)
 
     # ── Logic ─────────────────────────────────────────────────────────────────
 
@@ -327,6 +310,7 @@ class HomePage(QWizardPage):
         self._bar_r.set_selected(mode == 'random')
         self._bar_c.set_selected(mode == 'championship')
         self._bar_g.set_selected(mode == 'gallery')
+        self._bar_s.set_selected(mode == 'soundtrack')
         self._bar_x.set_selected(False)
         self.completeChanged.emit()
         # sync keyboard focus to the clicked/selected bar
@@ -347,4 +331,6 @@ class HomePage(QWizardPage):
             return self._wiz.ID_PRACTICE
         if self._wiz.mode == 'gallery':
             return self._wiz.ID_GALLERY
+        if self._wiz.mode == 'soundtrack':
+            return self._wiz.ID_SOUNDTRACK
         return self._wiz.ID_CIRCUIT

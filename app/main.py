@@ -1,7 +1,10 @@
 import sys
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+os.environ['QT_LOGGING_RULES'] = 'qt.multimedia.ffmpeg=false;qt.multimedia=false'
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPalette, QColor, QFont

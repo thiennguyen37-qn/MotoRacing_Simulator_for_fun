@@ -12,7 +12,7 @@ TEAM_COLOR: dict[str, QColor] = {
     'Kawasaki Factory Racing': QColor(28, 110, 5),
     'BMW Factory Racing':      QColor('#E6E6E6'),
     'Triumph Factory Racing':  QColor('#282828'),
-    'Razor Racing':            QColor('#FFBA00'),
+    'Razor Racing':            QColor('#FF6600'),
     'Falcon Racing':           QColor('#16166B'),
     'Storm Riders':            QColor('#7B2FBE'),
     'Phoenix Motorsport':      QColor('#FFFF00'),

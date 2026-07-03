@@ -8,7 +8,6 @@ from app.widgets.now_playing import NowPlayingToast
 
 PROJECT_ROOT = Path(__file__).parent.parent
 RAW          = PROJECT_ROOT / 'data' / 'raw'
-REPORT_ROOT  = PROJECT_ROOT / 'report'
 
 
 class MotoWizard(QWizard):
@@ -37,7 +36,6 @@ class MotoWizard(QWizard):
 
         # Per-circuit state (reset each circuit)
         self.circuit          = None
-        self.report_dir       = None
         self.practice_results = None
         self.grid_all_df      = None
         self.race_pts         = []

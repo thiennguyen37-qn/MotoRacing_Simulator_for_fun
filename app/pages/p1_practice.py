@@ -3,7 +3,6 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
 
 from src.simulator import run_practice
-from app.wizard import REPORT_ROOT
 from app.widgets.table_utils import make_table, fill_table
 
 HEADERS = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'BEST LAP', 'GAP']
@@ -45,8 +44,6 @@ class PracticePage(QWizardPage):
         if wiz.mode == 'championship':
             idx = wiz.circuit_index
             wiz.circuit     = wiz.circuits_df.iloc[idx]
-            wiz.report_dir  = REPORT_ROOT / wiz.circuit['country']
-            wiz.report_dir.mkdir(parents=True, exist_ok=True)
             wiz.practice_results = None
             wiz.grid_all_df      = None
             wiz.race_pts         = []

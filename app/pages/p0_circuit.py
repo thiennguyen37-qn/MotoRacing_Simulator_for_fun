@@ -5,7 +5,6 @@ from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor
 from PyQt6.QtCore import Qt, QSize, QRectF, QTimer
 
-from app.wizard import REPORT_ROOT
 from app.widgets.world_map import WorldMapWidget
 
 _IMAGES = Path(__file__).parent.parent.parent / 'images'
@@ -222,8 +221,6 @@ class CircuitPage(QWizardPage):
         idx = self._list.currentRow()
         self._wiz.circuit       = self._wiz.circuits_df.iloc[idx]
         self._wiz.circuit_index = idx
-        self._wiz.report_dir    = REPORT_ROOT / self._wiz.circuit['country']
-        self._wiz.report_dir.mkdir(parents=True, exist_ok=True)
         self._wiz.practice_results = None
         self._wiz.grid_all_df      = None
         self._wiz.race_pts         = []

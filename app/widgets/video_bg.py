@@ -1,10 +1,12 @@
 from pathlib import Path
 from PyQt6.QtGui import QImage, QPixmap, QPainter
-from PyQt6.QtCore import QObject, QUrl, QElapsedTimer, QRectF, pyqtSignal
+from PyQt6.QtCore import QObject, QUrl, QElapsedTimer, QRectF, Qt, pyqtSignal
 
 _IMAGES   = Path(__file__).parent.parent.parent / 'images'
 _VIDEO    = _IMAGES / 'homepage.mp4'
 _FALLBACK = _IMAGES / 'homepage.jpg'
+
+_FRAME_MS = 40      # ~25 fps cap for the background (lower = lighter; was ~30 fps)
 
 try:
     from PyQt6.QtMultimedia import QMediaPlayer, QVideoSink
@@ -19,7 +21,10 @@ class VideoBackground(QObject):
 
     Decodes images/homepage.mp4 once for the whole app; every page paints the
     same current frame. Falls back to images/homepage.jpg when no video exists.
-    Frame rate is capped at ~30 fps to keep the UI responsive.
+
+    Each frame is cover-scaled to the target size at most once (cached as a
+    QPixmap) so repaints are cheap blits instead of rescaling a full-res frame
+    every time — the key to staying smooth with 1080p sources.
     """
 
     frame_ready = pyqtSignal()
@@ -41,6 +46,11 @@ class VideoBackground(QObject):
         self._clock.start()
         self._last_ms = 0
 
+        # cover-scaled cache: scale each frame once per size, then just blit it
+        self._frame_id   = 0
+        self._scaled     = QPixmap()
+        self._scaled_key = None       # (frame_id, width, height)
+
         self._player = None
         if _OK and _VIDEO.exists():
             self._player = QMediaPlayer()
@@ -55,20 +65,33 @@ class VideoBackground(QObject):
         if not frame.isValid():
             return
         now = self._clock.elapsed()
-        if now - self._last_ms < 33:      # skip frame before the toImage() copy
+        if now - self._last_ms < _FRAME_MS:   # skip frame before the toImage() copy
             return
         self._last_ms = now
         self.image = frame.toImage()
+        self._frame_id += 1
         self.frame_ready.emit()
 
     def paint(self, painter: QPainter, widget) -> None:
         """Cover-scale the current frame (or fallback photo) onto widget."""
+        W, H = widget.width(), widget.height()
+        if W <= 0 or H <= 0:
+            return
+
         if not self.image.isNull():
-            iw, ih = self.image.width(), self.image.height()
-            scale = max(widget.width() / iw, widget.height() / ih)
-            w, h = iw * scale, ih * scale
-            x, y = (widget.width() - w) / 2, (widget.height() - h) / 2
-            painter.drawImage(QRectF(x, y, w, h), self.image)
+            key = (self._frame_id, W, H)
+            if key != self._scaled_key or self._scaled.isNull():
+                # Scale the full-res frame down once (cover), then reuse the
+                # pixmap for every repaint at this size — cheap on the CPU.
+                scaled = self.image.scaled(
+                    W, H,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.FastTransformation,
+                )
+                self._scaled     = QPixmap.fromImage(scaled)
+                self._scaled_key = key
+            pm = self._scaled
+            painter.drawPixmap((W - pm.width()) // 2, (H - pm.height()) // 2, pm)
             return
 
         if not self.fallback.isNull():

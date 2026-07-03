@@ -14,7 +14,6 @@ class NowPlayingToast(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setFixedWidth(300)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(20, 12, 26, 12)
@@ -83,7 +82,7 @@ class NowPlayingToast(QWidget):
         self._artist_lbl.setText(self._elide(artist, self._artist_lbl.font(), 210))
         self._artist_lbl.setVisible(bool(artist))
         self.layout().activate()
-        self.resize(300, self.sizeHint().height())
+        self.setFixedSize(self.layout().sizeHint())   # pill hugs its content
         self._reposition()
         self.show()
         self.raise_()

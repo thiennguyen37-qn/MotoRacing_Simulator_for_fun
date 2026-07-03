@@ -6,6 +6,11 @@ import numpy as np
 
 MAX_DELTA = 3.0
 
+# ── Race tuning ────────────────────────────────────────────────────────────────
+FORM_STD     = 0.060   # per-race form swing (score units), before consistency scaling
+TRAFFIC_K    = 0.10    # seconds lost per grid slot behind, on the opening lap
+TRAFFIC_LAPS = 5       # laps over which the grid/traffic penalty fades to zero
+
 
 # ── Shared utilities ──────────────────────────────────────────────────────────
 
@@ -15,10 +20,19 @@ def norm(v):
 
 
 def circuit_weights(c):
-    """Derive speed / cornering / braking weights from circuit layout."""
+    """Derive speed / cornering / braking weights from circuit layout.
+
+    Each circuit is stretched onto a speed<->technical spectrum so power tracks
+    and corner tracks reward genuinely different rider/bike archetypes instead
+    of a single all-rounder winning everywhere.
+    """
     sr = c['straight_length_m'] / (c['lap_length_km'] * 1000)
     cd = c['corners'] / c['lap_length_km']
-    w_spd, w_cor, w_brk = sr * 3, cd / 5, 0.30
+    s = min(1.0, max(0.0, (sr - 0.15) / 0.09))   # 0 = technical, 1 = power
+    k = min(1.0, max(0.0, (cd - 2.5) / 1.5))     # 0 = flowing,   1 = corner-heavy
+    w_spd = 0.10 + 0.78 * s
+    w_cor = 0.10 + 0.78 * k
+    w_brk = 0.16 + 0.22 * k                       # more corners => more braking zones
     t = w_spd + w_cor + w_brk
     return w_spd / t, w_cor / t, w_brk / t
 
@@ -42,9 +56,9 @@ def perf_score(row, w_spd, w_cor, w_brk):
         + w_cor * norm(row['bike_cornering'])
         + w_brk * norm(row['bike_braking'])
     )
-    rw_cor = w_cor + w_spd * 0.3
-    rw_brk = w_brk + w_spd * 0.5
-    rw_agg = w_spd * 0.2
+    rw_cor = w_cor + w_spd * 0.25
+    rw_brk = w_brk + w_spd * 0.25
+    rw_agg = w_spd * 0.6
     rw_tot = rw_cor + rw_brk + rw_agg
     rider = (
         (rw_cor / rw_tot) * norm(row['rider_cornering'])
@@ -72,9 +86,9 @@ def perf_score_quali(row, w_spd, w_cor, w_brk):
         + w_cor * norm(row['bike_cornering'])
         + w_brk * norm(row['bike_braking'])
     )
-    rw_cor = w_cor + w_spd * 0.2
-    rw_brk = w_brk + w_spd * 0.3
-    rw_agg = w_spd * 0.5
+    rw_cor = w_cor + w_spd * 0.25
+    rw_brk = w_brk + w_spd * 0.25
+    rw_agg = w_spd * 0.9
     rw_tot = rw_cor + rw_brk + rw_agg
     rider = (
         (rw_cor / rw_tot) * norm(row['rider_cornering'])
@@ -104,15 +118,15 @@ def simulate_quali_lap(row, base_time, lap_num, score, is_push):
 # ── Race ──────────────────────────────────────────────────────────────────────
 
 def perf_score_race(row, w_spd, w_cor, w_brk):
-    """Performance score for race — braking weighted higher than practice."""
+    """Performance score for race — aggression rewarded on speed-biased tracks."""
     bike = (
         w_spd * (norm(row['top_speed']) * 0.6 + norm(row['acceleration']) * 0.4)
         + w_cor * norm(row['bike_cornering'])
         + w_brk * norm(row['bike_braking'])
     )
-    rw_cor = w_cor + w_spd * 0.3
-    rw_brk = w_brk + w_spd * 0.5
-    rw_agg = w_spd * 0.2
+    rw_cor = w_cor + w_spd * 0.25
+    rw_brk = w_brk + w_spd * 0.25
+    rw_agg = w_spd * 0.7
     rw_tot = rw_cor + rw_brk + rw_agg
     rider = (
         (rw_cor / rw_tot) * norm(row['rider_cornering'])
@@ -122,7 +136,7 @@ def perf_score_race(row, w_spd, w_cor, w_brk):
     return 0.55 * bike + 0.45 * rider
 
 
-def simulate_race_lap(row, lap_num, total_laps, score, is_wet, base_time):
+def simulate_race_lap(row, lap_num, total_laps, score, is_wet, base_time, grid_pos=1):
     """Return a race lap time in seconds; returns None on crash (DNF)."""
     if lap_num > 1:
         crash_prob = 0.003 + 0.004 * norm(row['aggression']) * (1 - norm(row['consistency']))
@@ -132,9 +146,12 @@ def simulate_race_lap(row, lap_num, total_laps, score, is_wet, base_time):
     tyre_deg  = 2.0 * (1 - norm(row['tyre_management'])) * (lap_num / total_laps) ** 1.5
     fuel_gain = 0.4 * (lap_num - 1) / max(total_laps - 1, 1)
     start_pen = {1: 4.0, 2: 1.5}.get(lap_num, 0.0)
+    # Track position: starting further back means fighting through traffic for
+    # the opening laps; the cost fades linearly to zero over TRAFFIC_LAPS.
+    traffic   = max(0.0, (TRAFFIC_LAPS - (lap_num - 1)) / TRAFFIC_LAPS) * TRAFFIC_K * (grid_pos - 1)
     wet_pen   = 2.5 * (1 - norm(row['wet_performance'])) if is_wet else 0.0
     var_mult  = 2.0 if lap_num <= 2 else 1.0
     variance  = var_mult * 0.5 * (1 - norm(row['consistency'])) * (1 - norm(row['stability']))
     noise     = np.random.uniform(-variance, variance)
-    lap_sec   = base_time + time_pen + tyre_deg - fuel_gain + start_pen + wet_pen + noise
+    lap_sec   = base_time + time_pen + tyre_deg - fuel_gain + start_pen + traffic + wet_pen + noise
     return max(lap_sec, base_time * 0.97)

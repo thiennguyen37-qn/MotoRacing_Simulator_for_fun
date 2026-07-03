@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.engine import (
-    circuit_weights, fmt_lap, fmt_gap,
+    circuit_weights, fmt_lap, fmt_gap, norm, FORM_STD,
     perf_score, simulate_lap,
     perf_score_quali, simulate_quali_lap,
     perf_score_race, simulate_race_lap,
@@ -105,6 +105,14 @@ def run_race(df, circuit, grid_all_df):
     total_laps = math.ceil(100 / circuit['lap_length_km'])
     scores = {r['name']: perf_score_race(r, *w) for _, r in grid_df.iterrows()}
 
+    # Per-race form: each rider gets one random "good/bad day" offset, drawn once
+    # for the whole race. Steadier riders (high consistency) swing less.
+    scores = {
+        r['name']: min(1.0, max(0.0,
+            scores[r['name']] + np.random.normal(0, FORM_STD * (1 - 0.4 * norm(r['consistency'])))))
+        for _, r in grid_df.iterrows()
+    }
+
     is_wet = np.random.uniform(0, 100) <= np.random.uniform(0, 5)
 
     state = {}
@@ -112,7 +120,8 @@ def run_race(df, circuit, grid_all_df):
         state[r['name']] = {
             'bike_number': int(r['bike_number']),
             'team': r['team'], 'manufacturer': r['manufacturer'],
-            'cumul_time': 0.0, 'position': int(r['grid_pos']),
+            'cumul_time': 0.0, 'grid_pos': int(r['grid_pos']),
+            'position': int(r['grid_pos']),
             'dnf': False, 'dnf_lap': None,
         }
     dnf_log = []
@@ -123,7 +132,7 @@ def run_race(df, circuit, grid_all_df):
             if s['dnf']:
                 continue
             row = grid_df[grid_df['name'] == name].iloc[0]
-            t = simulate_race_lap(row, lap, total_laps, scores[name], is_wet, bt)
+            t = simulate_race_lap(row, lap, total_laps, scores[name], is_wet, bt, s['grid_pos'])
             if t is None:
                 s['dnf'] = True
                 s['dnf_lap'] = lap

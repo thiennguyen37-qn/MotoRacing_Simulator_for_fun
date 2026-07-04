@@ -273,7 +273,19 @@ class HomePage(QWizardPage):
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0))
-        self._vbg.paint(p, self)
+        # Scale against the wizard's full size (not this page's own, slightly
+        # smaller rect) so the video lines up with the strip QWizard reserves
+        # below the page for its hidden button row — see VideoBackground.paint.
+        offset = self.mapTo(self._wiz, self.rect().topLeft())
+        self._vbg.paint(p, self, full_size=self._wiz.size(), offset=offset)
+
+    def paint_gap_overlay(self, painter, rect):
+        """Continue the right nav panel's dark tint into the reserved strip
+        below it (see _GapFiller in wizard.py) — otherwise the video would
+        jump from muted (under the panel) to full brightness right at the seam.
+        """
+        x = rect.width() - PANEL_W
+        painter.fillRect(x, 0, PANEL_W, rect.height(), QColor(0, 0, 0, 215))
 
     # ── Logic ─────────────────────────────────────────────────────────────────
 

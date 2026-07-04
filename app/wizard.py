@@ -1,13 +1,41 @@
 from pathlib import Path
-from PyQt6.QtWidgets import QWizard, QApplication, QDialog
-from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtWidgets import QWizard, QApplication, QDialog, QWidget
+from PyQt6.QtGui import QPainter, QColor
+from PyQt6.QtCore import Qt, QEvent, QTimer
 
 from src.loader import load_riders, load_circuits
 from app.audio import AudioManager
 from app.widgets.now_playing import NowPlayingToast
+from app.widgets.video_bg import VideoBackground
 
 PROJECT_ROOT = Path(__file__).parent.parent
 RAW          = PROJECT_ROOT / 'data' / 'raw'
+
+
+class _GapFiller(QWidget):
+    """
+    Fills the strip QWizard reserves below the page for its (hidden) button
+    row. Full-bleed video pages (Home/Gallery/Soundtrack, identified by their
+    `_vbg` attribute) get the same video continued seamlessly into the strip —
+    see VideoBackground.paint. Other pages just get a plain dark fill.
+    """
+
+    def __init__(self, wizard: 'MotoWizard'):
+        super().__init__(wizard)
+        self._wizard = wizard
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(0, 0, 0))
+        page = self._wizard.currentPage()
+        vbg = getattr(page, '_vbg', None)
+        if vbg is not None:
+            offset = self.mapTo(self._wizard, self.rect().topLeft())
+            vbg.paint(p, self, full_size=self._wizard.size(), offset=offset)
+        overlay = getattr(page, 'paint_gap_overlay', None)
+        if overlay is not None:
+            overlay(p, self.rect())
 
 
 class MotoWizard(QWizard):
@@ -74,6 +102,14 @@ class MotoWizard(QWizard):
 
         self.setMaximumSize(16_777_215, 16_777_215)
 
+        # QWizard reserves a strip at the bottom for its button row — even with
+        # setButtonLayout([]) the row stays 0-height but the space (and its
+        # lighter default background) remains, showing as a stray gray bar.
+        # This app never shows wizard buttons (fully keyboard-driven), so this
+        # continues the current page's own background into that strip instead.
+        self._gap_filler = _GapFiller(self)
+        VideoBackground.instance().frame_ready.connect(self._gap_filler.update)
+
         self.currentIdChanged.connect(self._on_page_changed)
         self._on_page_changed(self.ID_HOME)
 
@@ -88,6 +124,28 @@ class MotoWizard(QWizard):
             self._audio_started = True
             self._audio.start()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._sync_gap_filler)
+
+    def _sync_gap_filler(self):
+        page = self.currentPage()
+        if page is None:
+            self._gap_filler.hide()
+            return
+        # page.geometry() is in its parent's coordinates; on pages with a
+        # title, QWizard's header banner sits above that parent, so map the
+        # page bottom into wizard coordinates to place the filler correctly.
+        y = page.mapTo(self, page.rect().bottomLeft()).y() + 1
+        h = self.height() - y
+        if h <= 0:
+            self._gap_filler.hide()
+            return
+        self._gap_filler.setGeometry(0, y, self.width(), h)
+        self._gap_filler.show()
+        self._gap_filler.raise_()
+        self._toast.raise_()   # keep the now-playing toast above the gap filler
+
     def reject(self):
         pass  # prevent Escape from closing the wizard
 
@@ -99,6 +157,11 @@ class MotoWizard(QWizard):
             super().accept()
 
     def eventFilter(self, obj, event):
+        # keep the gap filler glued to the page bottom whenever QWizard
+        # relayouts the page (maximize, header appearing, etc.)
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Move) and obj is self.currentPage():
+            self._sync_gap_filler()
+
         if event.type() in (
             QEvent.Type.MouseButtonPress,
             QEvent.Type.MouseButtonRelease,
@@ -150,3 +213,4 @@ class MotoWizard(QWizard):
 
     def _on_page_changed(self, page_id):
         self.setButtonLayout([])
+        QTimer.singleShot(0, self._sync_gap_filler)

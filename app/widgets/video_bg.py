@@ -1,6 +1,6 @@
 from pathlib import Path
 from PyQt6.QtGui import QImage, QPixmap, QPainter
-from PyQt6.QtCore import QObject, QUrl, QElapsedTimer, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QUrl, QElapsedTimer, QRectF, QSize, QPoint, Qt, pyqtSignal
 
 _IMAGES   = Path(__file__).parent.parent.parent / 'images'
 _VIDEO    = _IMAGES / 'homepage.mp4'
@@ -25,6 +25,16 @@ class VideoBackground(QObject):
     Each frame is cover-scaled to the target size at most once (cached as a
     QPixmap) so repaints are cheap blits instead of rescaling a full-res frame
     every time — the key to staying smooth with 1080p sources.
+
+    QWizard reserves a thin strip below every page for its (unused, hidden)
+    button row, so a full-bleed page is a few pixels short of the actual
+    window. `paint()` optionally takes `full_size`/`offset`: the scale/crop is
+    computed against the *window's* size instead of the calling widget's own
+    size, and the widget only draws the slice that falls inside its own
+    bounds. Every widget that passes the same `full_size` is therefore
+    painting a slice of one shared image, so a page and a separate sliver
+    widget positioned right below it line up pixel-for-pixel — the video
+    reads as continuous instead of being covered by a patch.
     """
 
     frame_ready = pyqtSignal()
@@ -72,17 +82,26 @@ class VideoBackground(QObject):
         self._frame_id += 1
         self.frame_ready.emit()
 
-    def paint(self, painter: QPainter, widget) -> None:
-        """Cover-scale the current frame (or fallback photo) onto widget."""
-        W, H = widget.width(), widget.height()
+    def paint(self, painter: QPainter, widget,
+              full_size: QSize | None = None, offset: QPoint | None = None) -> None:
+        """Cover-scale the current frame (or fallback photo) onto widget.
+
+        By default scales to `widget`'s own size. Pass `full_size` (the
+        window's size) and `offset` (widget's top-left within that window) to
+        instead scale against the window and draw only this widget's slice —
+        see the class docstring.
+        """
+        W = full_size.width()  if full_size is not None else widget.width()
+        H = full_size.height() if full_size is not None else widget.height()
+        ox, oy = (offset.x(), offset.y()) if offset is not None else (0, 0)
         if W <= 0 or H <= 0:
             return
 
         if not self.image.isNull():
             key = (self._frame_id, W, H)
             if key != self._scaled_key or self._scaled.isNull():
-                # Scale the full-res frame down once (cover), then reuse the
-                # pixmap for every repaint at this size — cheap on the CPU.
+                # Scale the full-res frame down once (cover) per window size,
+                # then reuse the pixmap for every widget/repaint — cheap blits.
                 scaled = self.image.scaled(
                     W, H,
                     Qt.AspectRatioMode.KeepAspectRatioByExpanding,
@@ -91,14 +110,15 @@ class VideoBackground(QObject):
                 self._scaled     = QPixmap.fromImage(scaled)
                 self._scaled_key = key
             pm = self._scaled
-            painter.drawPixmap((W - pm.width()) // 2, (H - pm.height()) // 2, pm)
+            fx, fy = (W - pm.width()) // 2, (H - pm.height()) // 2
+            painter.drawPixmap(fx - ox, fy - oy, pm)
             return
 
         if not self.fallback.isNull():
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             iw, ih = self.fallback.width(), self.fallback.height()
-            scale = max(widget.width() / iw, widget.height() / ih)
+            scale = max(W / iw, H / ih)
             w, h = iw * scale, ih * scale
-            x, y = (widget.width() - w) / 2, (widget.height() - h) / 2
-            painter.drawPixmap(QRectF(x, y, w, h), self.fallback,
+            x, y = (W - w) / 2, (H - h) / 2
+            painter.drawPixmap(QRectF(x - ox, y - oy, w, h), self.fallback,
                                QRectF(0, 0, iw, ih))

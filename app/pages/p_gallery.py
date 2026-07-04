@@ -836,7 +836,10 @@ class GalleryPage(QWizardPage):
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0))
-        self._vbg.paint(p, self)
+        # See HomePage.paintEvent — scale against the wizard's full size so
+        # the video lines up with the strip QWizard reserves below the page.
+        offset = self.mapTo(self._wiz, self.rect().topLeft())
+        self._vbg.paint(p, self, full_size=self._wiz.size(), offset=offset)
 
     def nextId(self):
         return -1

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from PyQt6.QtWidgets import QWizard, QApplication, QDialog, QWidget
 from PyQt6.QtGui import QPainter, QColor
@@ -10,6 +11,9 @@ from app.widgets.video_bg import VideoBackground
 
 PROJECT_ROOT = Path(__file__).parent.parent
 RAW          = PROJECT_ROOT / 'data' / 'raw'
+SEASON_SAVE  = PROJECT_ROOT / 'data' / 'season_save.json'
+HISTORY_FILE = PROJECT_ROOT / 'data' / 'history.json'
+START_YEAR   = 2026
 
 
 class _GapFiller(QWidget):
@@ -63,7 +67,8 @@ class MotoWizard(QWizard):
         self.all_race_pts  = []
 
         # Championship season order (set by CalendarPage)
-        self.season_df = None
+        self.season_df   = None
+        self.season_year = START_YEAR   # +1 every "Next Season"
         # Finished rounds: [{'circuit': name, 'country': ..., 'races': [df, df]}]
         # where each df holds [name, pos, dnf] — feeds the Results tab
         self.round_results = []
@@ -89,6 +94,7 @@ class MotoWizard(QWizard):
         from app.pages.p2_qualifying   import QualifyingPage
         from app.pages.p3_race         import RacePage
         from app.pages.p4_championship import ChampionshipPage
+        from app.pages.p_history       import HistoryPage
         from app.pages.p_gallery       import GalleryPage
         from app.pages.p_soundtrack    import SoundtrackPage
 
@@ -99,6 +105,7 @@ class MotoWizard(QWizard):
         self.ID_QUALI      = self.addPage(QualifyingPage(self))
         self.ID_RACE       = self.addPage(RacePage(self))
         self.ID_STANDINGS  = self.addPage(ChampionshipPage(self))
+        self.ID_HISTORY    = self.addPage(HistoryPage(self))
         self.ID_GALLERY    = self.addPage(GalleryPage(self))
         self.ID_SOUNDTRACK = self.addPage(SoundtrackPage(self, self._audio))
 
@@ -219,9 +226,60 @@ class MotoWizard(QWizard):
     def closeEvent(self, event):
         from app.pages.p_home import ExitDialog
         if ExitDialog(self).exec() == QDialog.DialogCode.Accepted:
+            self.save_season()      # resume mid-season on next launch
             event.accept()
         else:
             event.ignore()
+
+    # ── Season save / resume ──────────────────────────────────────────────────
+
+    def save_season(self):
+        """Snapshot the running championship (at round granularity) so the
+        player can continue after restarting the app. Also called on every
+        round advance, so quitting by any route loses at most the round in
+        progress."""
+        if self.mode != 'championship' or self.season_df is None:
+            return
+        data = {
+            'year':          self.season_year,
+            'rounds':        len(self.season_df),
+            'circuit_index': self.circuit_index,
+            'calendar':      [str(n) for n in self.season_df['circuit_name']],
+            'all_race_pts':  [df.to_dict('records') for df in self.all_race_pts],
+            'round_results': [
+                {'circuit': str(rd['circuit']), 'country': str(rd['country']),
+                 'races': [df.to_dict('records') for df in rd['races']]}
+                for rd in self.round_results],
+        }
+        SEASON_SAVE.write_text(json.dumps(data, default=int), encoding='utf-8')
+
+    def save_next_season_marker(self):
+        """After a season ends, remember that the career continues: the next
+        launch's CONTINUE opens the calendar for the following year."""
+        rounds = len(self.season_df) if self.season_df is not None else len(self.circuits_df)
+        data = {'season_complete': True,
+                'year': self.season_year + 1,
+                'rounds': rounds}
+        SEASON_SAVE.write_text(json.dumps(data), encoding='utf-8')
+
+    @staticmethod
+    def load_season_save():
+        """Return the saved-season dict, or None if absent/corrupt."""
+        if not SEASON_SAVE.exists():
+            return None
+        try:
+            return json.loads(SEASON_SAVE.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    @staticmethod
+    def clear_season_save():
+        SEASON_SAVE.unlink(missing_ok=True)
+
+    @staticmethod
+    def clear_history():
+        """Wipe the championship archive — a New career starts from scratch."""
+        HISTORY_FILE.unlink(missing_ok=True)
 
     def _on_page_changed(self, page_id):
         self.setButtonLayout([])

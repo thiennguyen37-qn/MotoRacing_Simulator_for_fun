@@ -4,7 +4,8 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
 
 from src.simulator import run_qualifying
-from app.widgets.table_utils import make_table, fill_table
+from app.widgets.table_utils import (make_table, fill_table,
+                                      SESSION_BTN_SS, SESSION_TABS_SS)
 
 HEADERS_Q  = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'BEST LAP', 'GAP']
 HEADERS_GR = ['GRID', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'BEST LAP']
@@ -25,9 +26,15 @@ class QualifyingPage(QWizardPage):
         ctrl = QHBoxLayout()
         self._btn_q1 = QPushButton('▶  Run Q1')
         self._btn_q1.setFixedHeight(34)
+        self._btn_q1.setStyleSheet(SESSION_BTN_SS)
+        self._btn_q1.setAutoDefault(False)
+        self._btn_q1.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_q1.clicked.connect(self._run_q1)
         self._btn_q2 = QPushButton('▶  Run Q2')
         self._btn_q2.setFixedHeight(34)
+        self._btn_q2.setStyleSheet(SESSION_BTN_SS)
+        self._btn_q2.setAutoDefault(False)
+        self._btn_q2.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_q2.setEnabled(False)
         self._btn_q2.clicked.connect(self._run_q2)
         self._status = QLabel('')
@@ -38,6 +45,7 @@ class QualifyingPage(QWizardPage):
 
         # Tab widget
         self._tabs = QTabWidget()
+        self._tabs.setStyleSheet(SESSION_TABS_SS)
         self._t_q1 = make_table(HEADERS_Q)
         self._t_q2 = make_table(HEADERS_Q)
         self._t_gr = make_table(HEADERS_GR)
@@ -57,6 +65,17 @@ class QualifyingPage(QWizardPage):
             bar = self._tabs.currentWidget().verticalScrollBar()
             bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
             return True
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            step = 1 if key == Qt.Key.Key_Right else -1
+            self._tabs.setCurrentIndex((self._tabs.currentIndex() + step) % self._tabs.count())
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # Enter drives the highlighted (enabled) run button
+            for btn in (self._btn_q1, self._btn_q2):
+                if btn.isEnabled():
+                    btn.click()
+                    return True
+            return False    # both sessions done -> global Enter advances
         return False
 
     def initializePage(self):

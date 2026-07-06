@@ -1,14 +1,14 @@
 import random
+import pandas as pd
 from pathlib import Path
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
                               QLabel, QFrame, QStackedWidget, QWidget)
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QTimer
 
-_IMAGES = Path(__file__).parent.parent.parent / 'images'
-# dedicated background wins; falls back to the homepage photo (same as CircuitPage)
-_BG = next((p for p in (_IMAGES / 'circuit_bg.jpg', _IMAGES / 'homepage.jpg')
-            if p.exists()), None)
+from app.widgets.video_bg import VideoBackground
+from app.widgets.world_map import WorldMapWidget
+
 _FLAGS = Path(__file__).parent.parent.parent / 'data' / 'flags'
 
 _ISO2 = {
@@ -26,7 +26,7 @@ def _flag_pix(country: str, h: int = 14) -> QPixmap | None:
     return QPixmap(str(p)).scaledToHeight(h, Qt.TransformationMode.SmoothTransformation)
 
 
-def _caps_label(text: str, size: int = 8, color: str = '#666677') -> QLabel:
+def _caps_label(text: str, size: int = 8, color: str = '#ffffff') -> QLabel:
     lbl = QLabel(text)
     lbl.setFont(QFont('Segoe UI', size, QFont.Weight.Bold))
     lbl.setStyleSheet(f'color: {color}; letter-spacing: 3px; background: transparent; border: none;')
@@ -100,13 +100,13 @@ class _SlotBar(QFrame):
     def _apply(self):
         if self._focused:
             bg, border = 'rgba(224,40,64,35)', '#e02840'
-            num, name, country = '#e02840', '#ffffff', '#cc8899'
+            num, name, country = '#e02840', '#ffffff', '#ffffff'
         elif self._filled:
             bg, border = 'rgba(255,255,255,6)', '#2a2a3a'
-            num, name, country = '#888899', '#eeeeee', '#666677'
+            num, name, country = '#ffffff', '#ffffff', '#ffffff'
         else:
             bg, border = 'rgba(255,255,255,3)', '#1a1a26'
-            num, name, country = '#444455', '#444455', '#333344'
+            num, name, country = '#ffffff', '#ffffff', '#ffffff'
         self.setStyleSheet(_BAR_SS.format(bg=bg, border=border))
         self._num.setStyleSheet(f'color: {num};')
         self._name.setStyleSheet(f'color: {name};')
@@ -121,7 +121,7 @@ class _RandomBar(QFrame):
         self.setFixedHeight(34)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 0, 14, 0)
-        self._lbl = QLabel('🎲  RANDOM CALENDAR')
+        self._lbl = QLabel('RANDOM CALENDAR')
         self._lbl.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
         self._lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._lbl)
@@ -131,7 +131,7 @@ class _RandomBar(QFrame):
         if focused:
             bg, border, txt = 'rgba(255,255,255,16)', '#8888aa', '#ffffff'
         else:
-            bg, border, txt = 'rgba(255,255,255,5)', '#2a2a3a', '#aaaabb'
+            bg, border, txt = 'rgba(255,255,255,5)', '#2a2a3a', '#ffffff'
         self.setStyleSheet(_BAR_SS.format(bg=bg, border=border))
         self._lbl.setStyleSheet(f'color: {txt}; letter-spacing: 2px;')
 
@@ -163,6 +163,87 @@ class _StartBar(QFrame):
         self._lbl.setStyleSheet(f'color: {txt}; letter-spacing: 2px;')
 
 
+# ── New / Continue menu bar (championship entry) ──────────────────────────────
+
+class _MenuBar(QFrame):
+    def __init__(self, title: str, sub: str):
+        super().__init__()
+        self.setFixedHeight(64)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 10, 22, 10)
+        lay.setSpacing(3)
+        self._ttl = QLabel(title)
+        self._ttl.setFont(QFont('Segoe UI', 12, QFont.Weight.Bold))
+        self._sub = QLabel(sub)
+        self._sub.setFont(QFont('Segoe UI', 9))
+        lay.addWidget(self._ttl)
+        lay.addWidget(self._sub)
+        self.set_state(False, True)
+
+    def set_sub(self, text: str):
+        self._sub.setText(text)
+
+    def set_state(self, focused: bool, enabled: bool):
+        # solid fills — the video behind made translucent bars hard to read
+        if focused and enabled:
+            bg, border, ttl, sub = '#33161f', '#e02840', '#ffffff', '#ffffff'
+        elif focused:                                     # focused but disabled
+            bg, border, ttl, sub = '#20202a', '#555566', '#666677', '#444455'
+        elif enabled:
+            bg, border, ttl, sub = '#191922', '#222233', '#ffffff', '#ffffff'
+        else:                                             # disabled
+            bg, border, ttl, sub = '#14141c', '#1a1a26', '#3a3a4a', '#2a2a36'
+        self.setStyleSheet(_BAR_SS.format(bg=bg, border=border))
+        self._ttl.setStyleSheet(f'color: {ttl}; letter-spacing: 2px;')
+        self._sub.setStyleSheet(f'color: {sub};')
+
+
+# ── Season-length selector (compact, sits beside the ROUNDS caps) ─────────────
+
+class _RoundsBar(QFrame):
+    def __init__(self, value: int):
+        super().__init__()
+        self.setFixedHeight(24)
+        self._value   = value
+        self._focused = False
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 0, 12, 0)
+        lay.setSpacing(8)
+        self._left  = QLabel('◀')
+        self._val   = QLabel('')
+        self._right = QLabel('▶')
+        for lbl, w in ((self._left, 12), (self._val, 24), (self._right, 12)):
+            lbl.setFixedWidth(w)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._left.setFont(QFont('Segoe UI', 8))
+        self._right.setFont(QFont('Segoe UI', 8))
+        self._val.setFont(QFont('Consolas', 10, QFont.Weight.Bold))
+        lay.addWidget(self._left)
+        lay.addWidget(self._val)
+        lay.addWidget(self._right)
+        self._apply()
+
+    def set_value(self, v: int):
+        self._value = v
+        self._apply()
+
+    def set_focused(self, f: bool):
+        self._focused = f
+        self._apply()
+
+    def _apply(self):
+        self._val.setText(f'{self._value}')
+        if self._focused:
+            bg, border, arrows, val = 'rgba(224,40,64,35)', '#e02840', '#ff8899', '#ffffff'
+        else:
+            bg, border, arrows, val = 'rgba(255,255,255,4)', '#222233', '#ffffff', '#ffffff'
+        self.setStyleSheet(_BAR_SS.format(bg=bg, border=border))
+        self._left.setStyleSheet(f'color: {arrows};')
+        self._right.setStyleSheet(f'color: {arrows};')
+        self._val.setStyleSheet(f'color: {val};')
+
+
 # ── Circuit row (right column picker) ─────────────────────────────────────────
 
 class _PickRow(QFrame):
@@ -192,10 +273,6 @@ class _PickRow(QFrame):
         self._name.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
         lay.addWidget(self._name, 1)
 
-        self._country = QLabel(str(circuit['country']).upper())
-        self._country.setFont(QFont('Segoe UI', 8))
-        lay.addWidget(self._country)
-
         self._tag = QLabel('')
         self._tag.setFont(QFont('Consolas', 8, QFont.Weight.Bold))
         self._tag.setFixedWidth(30)
@@ -218,20 +295,19 @@ class _PickRow(QFrame):
         if self._focused:
             if taken:   # focusable but Enter is denied — muted red
                 bg, border = 'rgba(224,40,64,12)', '#552030'
-                num, name, country, tag = '#553344', '#775566', '#553344', '#884455'
+                num, name, tag = '#553344', '#775566', '#884455'
             else:
                 bg, border = 'rgba(224,40,64,35)', '#e02840'
-                num, name, country, tag = '#e02840', '#ffffff', '#cc8899', '#e02840'
+                num, name, tag = '#e02840', '#ffffff', '#e02840'
         elif taken:
             bg, border = 'rgba(255,255,255,2)', '#15151f'
-            num, name, country, tag = '#33333f', '#3a3a4a', '#2a2a36', '#663344'
+            num, name, tag = '#33333f', '#3a3a4a', '#663344'
         else:
             bg, border = 'rgba(255,255,255,4)', '#222233'
-            num, name, country, tag = '#888899', '#dddde8', '#666677', '#666677'
+            num, name, tag = '#ffffff', '#ffffff', '#ffffff'
         self.setStyleSheet(_BAR_SS.format(bg=bg, border=border))
         self._num.setStyleSheet(f'color: {num};')
         self._name.setStyleSheet(f'color: {name};')
-        self._country.setStyleSheet(f'color: {country}; letter-spacing: 2px;')
         self._tag.setStyleSheet(f'color: {tag};')
 
 
@@ -245,36 +321,74 @@ class CalendarPage(QWizardPage):
         self._wiz = wiz
         self.setTitle('')
         self.setSubTitle('')
-        self._bg_pixmap = QPixmap(str(_BG)) if _BG else QPixmap()
+        # shared, always-running video background (same player as the homepage,
+        # so it just carries on — never restarts)
+        self._vbg = VideoBackground.instance()
+        self._vbg.frame_ready.connect(self._on_bg_frame)
 
-        self._n = len(wiz.circuits_df)
+        self._n = len(wiz.circuits_df)      # available circuits (= max rounds)
+        self._rounds = self._n              # season length, user-selectable 1.._n
         self._assign: list[int | None] = [None] * self._n
-        self._focus       = 0       # 0.._n-1 = slots, _n = RANDOM bar, _n+1 = START bar
+        # focus token: 'len' | slot index (0.._rounds-1) | 'random' | 'start'
+        self._focus       = 'len'
         self._picker_open = False
         self._pick_focus  = 0
+        self._resume      = False
+        self._new_career  = False           # NEW pressed; wipe deferred to START
+        self._menu_focus  = 'new'           # 'new' | 'cont' (menu phase)
 
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self._pages = QStackedWidget()      # 0 = New/Continue menu, 1 = calendar
+        self._pages.setStyleSheet('background: transparent;')
+        outer.addWidget(self._pages)
+
+        # ── Page 0: New / Continue menu ───────────────────────────────────────
+        menu_w = QWidget()
+        menu_w.setStyleSheet('background: transparent;')
+        ml = QVBoxLayout(menu_w)
+        ml.setContentsMargins(36, 24, 36, 24)
+        m_sub = QLabel('Start a new career or continue where you left off')
+        m_sub.setFont(QFont('Segoe UI', 9))
+        m_sub.setStyleSheet('color: #ffffff; background: transparent; border: none;')
+        ml.addWidget(m_sub)
+        ml.addStretch(2)
+        m_center = QHBoxLayout()
+        m_center.addStretch(1)
+        m_col = QVBoxLayout()
+        m_col.setSpacing(12)
+        self._mb_new  = _MenuBar('NEW CHAMPIONSHIP',
+                                 'Fresh career from 2026 — resets the championship history')
+        self._mb_cont = _MenuBar('CONTINUE', '')
+        m_col.addWidget(self._mb_new)
+        m_col.addWidget(self._mb_cont)
+        m_center.addLayout(m_col, 3)
+        m_center.addStretch(1)
+        ml.addLayout(m_center)
+        ml.addStretch(3)
+        self._pages.addWidget(menu_w)
+
+        # ── Page 1: the season calendar itself ────────────────────────────────
+        cal_w = QWidget()
+        cal_w.setStyleSheet('background: transparent;')
+        self._pages.addWidget(cal_w)
+
+        root = QVBoxLayout(cal_w)
         root.setContentsMargins(36, 24, 36, 24)
         root.setSpacing(0)
 
-        # ── Header ────────────────────────────────────────────────────────────
+        # ── Header row: description + progress (no big red title) ────────────
         hdr_row = QHBoxLayout()
-        hdr = QLabel('SEASON CALENDAR')
-        hdr.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
-        hdr.setStyleSheet('color: #e02840; letter-spacing: 3px; background: transparent; border: none;')
-        hdr_row.addWidget(hdr)
+        sub = QLabel('Arrange the running order of the championship rounds')
+        sub.setFont(QFont('Segoe UI', 9))
+        sub.setStyleSheet('color: #ffffff; background: transparent; border: none;')
+        hdr_row.addWidget(sub)
         hdr_row.addStretch(1)
         self._progress = QLabel('')
         self._progress.setFont(QFont('Consolas', 10, QFont.Weight.Bold))
-        self._progress.setStyleSheet('color: #666677; background: transparent; border: none;')
+        self._progress.setStyleSheet('color: #ffffff; background: transparent; border: none;')
         hdr_row.addWidget(self._progress)
         root.addLayout(hdr_row)
-        root.addSpacing(4)
-
-        sub = QLabel('Arrange the running order of the championship rounds')
-        sub.setFont(QFont('Segoe UI', 9))
-        sub.setStyleSheet('color: #666677; background: transparent; border: none;')
-        root.addWidget(sub)
         root.addSpacing(12)
 
         div = QFrame()
@@ -286,10 +400,17 @@ class CalendarPage(QWizardPage):
         main = QHBoxLayout()
         main.setSpacing(24)
 
-        # ── Left: 13 round slots + start bar ──────────────────────────────────
+        # ── Left: season length + round slots + action bars ──────────────────
         left = QVBoxLayout()
         left.setSpacing(4)
-        left.addWidget(_caps_label('ROUNDS'))
+        caps_row = QHBoxLayout()
+        caps_row.addWidget(_caps_label('ROUNDS'))
+        caps_row.addStretch(1)
+        caps_row.addWidget(_caps_label('SEASON LENGTH'))
+        self._len_bar = _RoundsBar(self._rounds)
+        caps_row.addSpacing(8)
+        caps_row.addWidget(self._len_bar)
+        left.addLayout(caps_row)
         left.addSpacing(4)
 
         self._slots = [_SlotBar(i + 1) for i in range(self._n)]
@@ -307,90 +428,195 @@ class CalendarPage(QWizardPage):
         left.addStretch(1)
         main.addLayout(left, 5)
 
-        # ── Right: circuit picker (hint <-> list) ─────────────────────────────
-        self._stack = QStackedWidget()
-        self._stack.setStyleSheet('background: transparent;')
-
-        # index 0 — hint shown while navigating the slots
-        hint_w = QFrame()
-        hint_w.setStyleSheet(
-            'QFrame { background: rgba(255,255,255,3); border: 1px solid #1a1a26; border-radius: 12px; }'
-            'QLabel { background: transparent; border: none; }'
-        )
-        hint_l = QVBoxLayout(hint_w)
-        hint_l.addStretch(1)
-        for text, size, color in (
-            ('⏎', 26, '#2d2d44'),
-            ('ENTER — choose a circuit for the highlighted round', 10, '#555566'),
-            ('↑ ↓ — move between rounds', 9, '#444455'),
-            ('Each circuit can only be used once', 9, '#444455'),
-            ('🎲 RANDOM CALENDAR — shuffle the whole season at once', 9, '#444455'),
-        ):
-            lbl = QLabel(text)
-            lbl.setFont(QFont('Segoe UI', size, QFont.Weight.Bold if size == 10 else QFont.Weight.Normal))
-            lbl.setStyleSheet(f'color: {color};')
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint_l.addWidget(lbl)
-            hint_l.addSpacing(6)
-        hint_l.addStretch(1)
-        self._stack.addWidget(hint_w)
-
-        # index 1 — circuit list
-        pick_w = QWidget()
-        pick_w.setStyleSheet('background: transparent;')
-        pick_l = QVBoxLayout(pick_w)
-        pick_l.setContentsMargins(0, 0, 0, 0)
-        pick_l.setSpacing(4)
-        self._pick_hdr = _caps_label('SELECT CIRCUIT')
-        pick_l.addWidget(self._pick_hdr)
-        pick_l.addSpacing(4)
-        self._rows = [_PickRow(i, c) for i, (_, c) in enumerate(wiz.circuits_df.iterrows())]
-        for row in self._rows:
-            pick_l.addWidget(row)
-        pick_l.addStretch(1)
-        self._stack.addWidget(pick_w)
-
-        main.addWidget(self._stack, 6)
+        # right half stays empty — the video shows through; the circuit picker
+        # opens as a floating panel above a dimmed page (see _open_picker)
+        main.addStretch(6)
         root.addLayout(main, 1)
 
-    # ── Background (same idiom as CircuitPage) ────────────────────────────────
+        self._build_picker_panel(wiz)
+
+    # ── Floating circuit picker (dimmed background + list | map panel) ─────────
+
+    def _build_picker_panel(self, wiz):
+        # full-page dim layer that pushes the calendar into the background
+        self._dim = QWidget(self)
+        self._dim.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._dim.setStyleSheet('background: rgba(0, 0, 6, 185);')
+        self._dim.hide()
+
+        self._panel = QFrame(self)
+        self._panel.setObjectName('pickerPanel')
+        self._panel.setStyleSheet(
+            '#pickerPanel { background: #0e0e15; border: 1px solid #2a2a3a;'
+            ' border-radius: 14px; }')
+        self._panel.hide()
+
+        pl = QHBoxLayout(self._panel)
+        pl.setContentsMargins(24, 20, 24, 20)
+        pl.setSpacing(22)
+
+        # left: header + circuit list
+        left = QVBoxLayout()
+        left.setSpacing(4)
+        self._pick_hdr = _caps_label('SELECT CIRCUIT')
+        left.addWidget(self._pick_hdr)
+        left.addSpacing(6)
+        self._rows = [_PickRow(i, c) for i, (_, c) in enumerate(wiz.circuits_df.iterrows())]
+        for row in self._rows:
+            left.addWidget(row)
+        left.addStretch(1)
+        pl.addLayout(left, 8)
+
+        # right: world map + circuit stats (same idiom as the Random Race page)
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        map_frame = QFrame()
+        map_frame.setStyleSheet(
+            'QFrame { background: #0e0e14; border: 1px solid #1e1e2e; border-radius: 12px; }')
+        mf_l = QVBoxLayout(map_frame)
+        mf_l.setContentsMargins(5, 5, 5, 5)
+        self._map = WorldMapWidget()
+        mf_l.addWidget(self._map)
+        right.addWidget(map_frame, 1)
+
+        info = QFrame()
+        info.setStyleSheet(
+            'QFrame { background: rgba(255,255,255,4); border: 1px solid #1e1e2e; border-radius: 12px; }'
+            'QLabel { background: transparent; border: none; }')
+        info_row = QHBoxLayout(info)
+        info_row.setContentsMargins(18, 10, 18, 10)
+        info_row.setSpacing(26)
+        self._stat_labels = {}
+        for key in ('LENGTH', 'CORNERS', 'STRAIGHT'):
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            k_lbl = QLabel(key)
+            k_lbl.setFont(QFont('Segoe UI', 7, QFont.Weight.Bold))
+            k_lbl.setStyleSheet('color: #ffffff; letter-spacing: 2px;')
+            v_lbl = QLabel('—')
+            v_lbl.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
+            v_lbl.setStyleSheet('color: #ffffff;')
+            col.addWidget(k_lbl)
+            col.addWidget(v_lbl)
+            self._stat_labels[key] = v_lbl
+            info_row.addLayout(col)
+        info_row.addStretch(1)
+        right.addWidget(info)
+        pl.addLayout(right, 12)
+
+        # matplotlib repaints are expensive — debounce like the Random Race page
+        self._pending_country = None
+        self._map_timer = QTimer(self)
+        self._map_timer.setSingleShot(True)
+        self._map_timer.setInterval(180)
+        self._map_timer.timeout.connect(
+            lambda: self._pending_country and self._map.highlight(self._pending_country))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._layout_picker()
+
+    def _layout_picker(self):
+        self._dim.setGeometry(self.rect())
+        self._panel.setGeometry(self.rect().adjusted(42, 26, -42, -26))
+
+    # ── Background: shared video + darkening overlay ──────────────────────────
+
+    def _on_bg_frame(self):
+        if self.isVisible():
+            self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0))
-        if not self._bg_pixmap.isNull():
-            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            iw, ih = self._bg_pixmap.width(), self._bg_pixmap.height()
-            scale = max(self.width() / iw, self.height() / ih)
-            w, h = iw * scale, ih * scale
-            x, y = (self.width() - w) / 2, (self.height() - h) / 2
-            p.drawPixmap(QRectF(x, y, w, h), self._bg_pixmap, QRectF(0, 0, iw, ih))
+        # scale against the wizard's full size so the video lines up with the
+        # reserved strip below the page — see VideoBackground.paint
+        offset = self.mapTo(self._wiz, self.rect().topLeft())
+        self._vbg.paint(p, self, full_size=self._wiz.size(), offset=offset)
         p.fillRect(self.rect(), QColor(0, 0, 8, 190))
+
+    def paint_gap_overlay(self, painter, rect):
+        """Continue the darkening tint into the strip below the page (see
+        _GapFiller) so the video doesn't jump to full brightness there."""
+        painter.fillRect(rect, QColor(0, 0, 8, 190))
 
     # ── Wizard flow ───────────────────────────────────────────────────────────
 
     def initializePage(self):
-        self._wiz.season_df = None
-        self._wiz.round_results = []   # fresh season — clear past results
+        """Entered from Home: show the New / Continue menu."""
+        self._resume = False
+        self._new_career = False
+        self._save = self._wiz.load_season_save()
+        if self._save and self._save.get('season_complete'):
+            self._mb_cont.set_sub(
+                f"Start the {self._save['year']} season — set up the calendar")
+        elif self._save:
+            self._mb_cont.set_sub(
+                f"Resume the {self._save['year']} season — "
+                f"round {self._save['circuit_index'] + 1} of {self._save['rounds']}")
+        else:
+            self._mb_cont.set_sub('No season in progress')
+        self._menu_focus = 'cont' if self._save else 'new'
+        self._update_menu_styles()
+        self._close_picker()
+        self._pages.setCurrentIndex(0)
+        self.completeChanged.emit()
+
+    def _update_menu_styles(self):
+        self._mb_new.set_state(self._menu_focus == 'new', True)
+        self._mb_cont.set_state(self._menu_focus == 'cont', bool(self._save))
+
+    def _start_new_career(self):
+        """NEW: back to 2026 — but nothing is wiped yet. The history and any
+        old save are only destroyed when the new season actually STARTS, so
+        closing the app during calendar setup loses nothing."""
+        from app.wizard import START_YEAR
+        wiz = self._wiz
+        wiz.season_year = START_YEAR
+        self._new_career = True
+        self._rounds = self._n          # fresh career defaults to a full calendar
+        self._enter_calendar()
+
+    def begin_followup_season(self):
+        """Called by Standings' Next Season — year already advanced; go
+        straight to the calendar, keeping the chosen season length."""
+        self._resume = False
+        self._new_career = False
+        self._enter_calendar()
+
+    def _enter_calendar(self):
+        wiz = self._wiz
+        wiz.season_df = None
+        wiz.round_results = []          # fresh season — clear past results
         self._assign = [None] * self._n
         for bar in self._slots:
             bar.set_circuit(None)
         for row in self._rows:
             row.set_taken(None)
-        self._picker_open = False
-        self._stack.setCurrentIndex(0)
-        self._set_focus(0)
+        self._apply_rounds()
+        self._close_picker()
+        self._pages.setCurrentIndex(1)
+        self._set_focus('len')
         self._refresh_progress()
         self.completeChanged.emit()
 
     def isComplete(self):
-        return all(a is not None for a in self._assign)
+        return all(self._assign[i] is not None for i in range(self._rounds))
 
     def validatePage(self):
+        if self._resume:               # state already loaded from the save file
+            self._resume = False
+            return True
         if not self.isComplete():
             return False
-        season = self._wiz.circuits_df.iloc[self._assign].reset_index(drop=True)
+        picks = self._assign[:self._rounds]
+        season = self._wiz.circuits_df.iloc[picks].reset_index(drop=True)
         self._wiz.season_df = season
+        if self._new_career:
+            # the point of no return — only now does NEW wipe the archive
+            self._wiz.clear_history()
+            self._new_career = False
+        self._wiz.save_season()        # starting fresh replaces any old save
         return True
 
     def nextId(self):
@@ -399,24 +625,51 @@ class CalendarPage(QWizardPage):
     # ── Keyboard ──────────────────────────────────────────────────────────────
 
     def handle_key(self, key: int) -> bool:
+        if self._pages.currentIndex() == 0:
+            return self._menu_key(key)
         if self._picker_open:
             return self._picker_key(key)
         return self._slots_key(key)
 
-    def _slots_key(self, key: int) -> bool:
+    def _menu_key(self, key: int) -> bool:
         if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-            step = -1 if key == Qt.Key.Key_Up else 1
-            self._set_focus((self._focus + step) % (self._n + 2))
-            return True
-        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right) and self._focus >= self._n:
-            # RANDOM and START sit side by side — hop between them
-            self._set_focus(self._n if self._focus == self._n + 1 else self._n + 1)
+            self._menu_focus = 'cont' if self._menu_focus == 'new' else 'new'
+            self._update_menu_styles()
             return True
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
-            if self._focus == self._n:                    # RANDOM CALENDAR bar
+            if self._menu_focus == 'new':
+                self._start_new_career()
+            elif self._save:                 # CONTINUE — denied when no save
+                self._resume_season()
+            return True
+        return False       # Backspace/Escape fall through -> back to Home
+
+    def _nav_order(self) -> list:
+        return ['len'] + list(range(self._rounds)) + ['random', 'start']
+
+    def _slots_key(self, key: int) -> bool:
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            order = self._nav_order()
+            step = -1 if key == Qt.Key.Key_Up else 1
+            i = order.index(self._focus) if self._focus in order else 0
+            self._set_focus(order[(i + step) % len(order)])
+            return True
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            if self._focus == 'len':                       # season length 1.._n
+                delta = -1 if key == Qt.Key.Key_Left else 1
+                self._set_rounds(self._rounds + delta)
+                return True
+            if self._focus in ('random', 'start'):         # side-by-side hop
+                self._set_focus('random' if self._focus == 'start' else 'start')
+                return True
+            return False
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            if self._focus == 'len':
+                return True                                # ← → adjust; Enter no-op
+            if self._focus == 'random':
                 self._randomize()
                 return True
-            if self._focus == self._n + 1:                # START bar
+            if self._focus == 'start':
                 if self.isComplete():
                     self._wiz.next()
                 return True                                # deny while incomplete
@@ -441,19 +694,89 @@ class CalendarPage(QWizardPage):
 
     def _round_of(self) -> dict:
         """circuit index -> round number (1-based) currently owning it."""
-        return {ci: r + 1 for r, ci in enumerate(self._assign) if ci is not None}
+        return {ci: r + 1 for r, ci in enumerate(self._assign[:self._rounds])
+                if ci is not None}
 
-    def _set_focus(self, idx: int):
-        self._focus = idx
+    def _set_rounds(self, r: int):
+        r = max(1, min(self._n, r))
+        if r == self._rounds:
+            return
+        self._rounds = r
+        # drop assignments that fell outside the shortened season
+        for i in range(r, self._n):
+            if self._assign[i] is not None:
+                self._assign[i] = None
+                self._slots[i].set_circuit(None)
+        self._apply_rounds()
+        self._refresh_progress()
+        self.completeChanged.emit()
+
+    def _apply_rounds(self):
+        self._len_bar.set_value(self._rounds)
         for i, bar in enumerate(self._slots):
-            bar.set_focused(i == idx)
-        self._random.set_focused(idx == self._n)
-        self._start.set_state(self.isComplete(), idx == self._n + 1)
+            bar.setVisible(i < self._rounds)
+        self._start.set_state(self.isComplete(), self._focus == 'start')
+
+    def _set_focus(self, token):
+        self._focus = token
+        for i, bar in enumerate(self._slots):
+            bar.set_focused(token == i)
+        self._len_bar.set_focused(token == 'len')
+        self._random.set_focused(token == 'random')
+        self._start.set_state(self.isComplete(), token == 'start')
+
+    def _resume_season(self):
+        """Load the saved season into the wizard and jump straight to the
+        current round's practice."""
+        wiz  = self._wiz
+        data = self._save or wiz.load_season_save()
+        if not data:
+            return
+        self._new_career = False
+        if data.get('season_complete'):
+            # Career continues with a fresh calendar for the following year.
+            # The marker is deliberately KEPT on disk: if the app closes
+            # before START SEASON, Continue must still be offered — starting
+            # the season overwrites this file with the real save anyway.
+            wiz.season_year = int(data['year'])
+            self._rounds = max(1, min(self._n, int(data['rounds'])))
+            self._enter_calendar()
+            return
+        by_name = {str(c['circuit_name']): i
+                   for i, (_, c) in enumerate(wiz.circuits_df.iterrows())}
+        try:
+            picks = [by_name[n] for n in data['calendar']]
+        except KeyError:            # circuit renamed/removed -> save unusable
+            wiz.clear_season_save()
+            self._save = None
+            self._menu_focus = 'new'
+            self._update_menu_styles()
+            return
+        wiz.season_df     = wiz.circuits_df.iloc[picks].reset_index(drop=True)
+        wiz.season_year   = int(data['year'])
+        wiz.circuit_index = int(data['circuit_index'])
+        wiz.all_race_pts  = [pd.DataFrame(r) for r in data['all_race_pts']]
+        wiz.round_results = [
+            {'circuit': rd['circuit'], 'country': rd['country'],
+             'races': [pd.DataFrame(x) for x in rd['races']]}
+            for rd in data['round_results']]
+        wiz.race_pts     = []
+        wiz.race_results = []
+        self._rounds = max(1, min(self._n, int(data['rounds'])))
+        self._resume = True
+        wiz.next()
 
     def _set_pick_focus(self, idx: int):
         self._pick_focus = idx
         for i, row in enumerate(self._rows):
             row.set_focused(i == idx)
+        # stats update instantly; the map follows once the cursor rests
+        c = self._wiz.circuits_df.iloc[idx]
+        self._stat_labels['LENGTH'].setText(f"{c['lap_length_km']} km")
+        self._stat_labels['CORNERS'].setText(str(int(c['corners'])))
+        self._stat_labels['STRAIGHT'].setText(f"{int(c['straight_length_m'])} m")
+        self._pending_country = str(c['country'])
+        self._map_timer.start()
 
     def _open_picker(self):
         self._picker_open = True
@@ -468,12 +791,18 @@ class CalendarPage(QWizardPage):
             start = cur
         else:
             start = next((ci for ci in range(self._n) if ci not in taken), 0)
+        self._layout_picker()
+        self._dim.show()
+        self._dim.raise_()
+        self._panel.show()
+        self._panel.raise_()
         self._set_pick_focus(start)
-        self._stack.setCurrentIndex(1)
 
     def _close_picker(self):
         self._picker_open = False
-        self._stack.setCurrentIndex(0)
+        self._map_timer.stop()
+        self._panel.hide()
+        self._dim.hide()
 
     def _pick_current(self):
         ci = self._pick_focus
@@ -486,25 +815,25 @@ class CalendarPage(QWizardPage):
         self._refresh_progress()
         self.completeChanged.emit()
         # advance to the next empty round; land on START when all are filled
-        nxt = next((i for i in range(self._n) if self._assign[i] is None), self._n + 1)
+        nxt = next((i for i in range(self._rounds) if self._assign[i] is None), 'start')
         self._set_focus(nxt)
 
     def _randomize(self):
-        """Fill every round with a fresh random permutation of the circuits
+        """Fill the season with a random draw of distinct circuits
         (overwrites any manual picks — slots can still be edited afterwards)."""
-        order = list(range(self._n))
-        random.shuffle(order)
-        self._assign = order
-        for r, ci in enumerate(order):
+        picks = random.sample(range(self._n), self._rounds)
+        self._assign = [None] * self._n
+        for r, ci in enumerate(picks):
+            self._assign[r] = ci
             self._slots[r].set_circuit(self._wiz.circuits_df.iloc[ci])
         self._refresh_progress()
         self.completeChanged.emit()
-        self._set_focus(self._n + 1)   # jump to START
+        self._set_focus('start')
 
     def _refresh_progress(self):
-        done = sum(1 for a in self._assign if a is not None)
-        self._progress.setText(f'{done} / {self._n}')
+        done = sum(1 for a in self._assign[:self._rounds] if a is not None)
+        self._progress.setText(f'{done} / {self._rounds}')
         self._progress.setStyleSheet(
-            f"color: {'#e02840' if done == self._n else '#666677'};"
+            f"color: {'#e02840' if done == self._rounds else '#ffffff'};"
             'background: transparent; border: none;'
         )

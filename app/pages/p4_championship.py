@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 from pathlib import Path
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
@@ -9,6 +10,7 @@ from PyQt6.QtCore import Qt, QSize
 from app.widgets.table_utils import (make_table, fill_table, row_bg,
                                       TEAM_COLOR, _DEFAULT_COLOR, GRID_ROLE)
 from app.pages.p_calendar import _ISO2
+from app.wizard import HISTORY_FILE as _HISTORY
 
 _FLAGS = Path(__file__).parent.parent.parent / 'data' / 'flags'
 
@@ -28,6 +30,43 @@ _C_PTS  = QColor(28, 96, 48)      # 4-15 — points finish (green)
 _C_NOPT = QColor(42, 58, 104)     # 16+  — outside the points (blue)
 _C_RET  = QColor(96, 42, 112)     # Ret  — DNF (purple)
 _WHITE  = QColor(240, 240, 248)
+
+# Tab chips: the selected section is always a filled box, never just tinted
+# text — its fill tells you whether the cursor is on it, you're inside it,
+# or the cursor moved on to the action buttons.
+_TABS_BASE_SS = """
+    QTabWidget::pane { border: none; }
+    QTabBar::tab {
+        background: rgba(255,255,255,5);
+        color: #666677;
+        padding: 7px 20px;
+        border: none;
+        border-radius: 6px;
+        margin-right: 6px;
+        font-weight: 600;
+    }
+"""
+_TAB_SEL_BROWSE  = 'background: #e02840; color: #ffffff;'           # cursor here
+_TAB_SEL_INSIDE  = 'background: rgba(224,40,64,90); color: #ffffff;'  # entered
+_TAB_SEL_ELSEWHERE = 'background: rgba(255,255,255,16); color: #ccccdd;'  # cursor on buttons
+
+# Action buttons: BOTH states carry identical padding/border metrics — mixing
+# a styled state with the native (Fusion) one makes the button change size
+# whenever focus moves onto it.
+_BTN_FOCUS_SS = """
+    QPushButton {
+        background: #e02840; color: #ffffff;
+        border: 1px solid #ff6080; border-radius: 6px;
+        padding: 0 18px; font-weight: 600;
+    }
+"""
+_BTN_IDLE_SS = """
+    QPushButton {
+        background: #20202a; color: #aaaabb;
+        border: 1px solid #2a2a3a; border-radius: 6px;
+        padding: 0 18px; font-weight: 600;
+    }
+"""
 
 
 class _FlagHeaderView(QHeaderView):
@@ -89,10 +128,30 @@ class ChampionshipPage(QWizardPage):
         self._btn_next = QPushButton('')
         self._btn_next.setFixedHeight(34)
         self._btn_next.setAutoDefault(False)
+        # keyboard focus is managed by _browse_focus — a real Tab-key focus on
+        # the button would silently desync from the page's navigation state
+        self._btn_next.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_next.clicked.connect(self._on_next_clicked)
+        # second action, shown only once the season is over: finish -> home
+        # (while _btn_next becomes "Next Season" -> back to the calendar)
+        self._btn_finish = QPushButton('🏆  Finish Championship')
+        self._btn_finish.setFixedHeight(34)
+        self._btn_finish.setAutoDefault(False)
+        self._btn_finish.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._btn_finish.clicked.connect(self._finish_clicked)
+        self._btn_finish.setVisible(False)
+        # save & exit: banks the round (or archives the season) and goes home
+        self._btn_home = QPushButton('⌂  Home')
+        self._btn_home.setFixedHeight(34)
+        self._btn_home.setAutoDefault(False)
+        self._btn_home.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._btn_home.clicked.connect(self._home_clicked)
+        self._btn_home.setVisible(False)
         self._info_lbl = QLabel('')
         self._info_lbl.setFont(QFont('Segoe UI', 10))
         ctrl.addWidget(self._btn_next)
+        ctrl.addWidget(self._btn_finish)
+        ctrl.addWidget(self._btn_home)
         ctrl.addWidget(self._info_lbl, 1)
         layout.addLayout(ctrl)
 
@@ -120,6 +179,13 @@ class ChampionshipPage(QWizardPage):
         self._team_total  = None
         self._manu_total  = None
 
+        # Two-level navigation: ←/→ browse tabs + the Next-Round button,
+        # Enter dives into the focused tab (arrows then scroll its content),
+        # Esc climbs back out to browse mode.
+        self._browse_focus  = 0       # 0..count-1 = tabs, count(+1) = button(s)
+        self._in_content    = False
+        self._history_saved = False
+
     # ── Wizard flow ───────────────────────────────────────────────────────────
 
     def initializePage(self):
@@ -129,44 +195,104 @@ class ChampionshipPage(QWizardPage):
             season = wiz.season_df if wiz.season_df is not None else wiz.circuits_df
             n   = len(season)
             idx = wiz.circuit_index
-            self.setSubTitle(f"Round {idx + 1}/{n}  —  {wiz.circuit['circuit_name']}")
+            self.setSubTitle(f"{wiz.season_year} World Championship  ·  "
+                             f"Round {idx + 1}/{n}  —  {wiz.circuit['circuit_name']}")
             self._info_lbl.setText(
                 f"  Season standing after {idx + 1} of {n} rounds"
                 + (f"  |  {n - idx - 1} round(s) remaining" if idx < n - 1 else "  |  Final standings")
             )
             if idx < n - 1:
                 self._btn_next.setText(f'▶  Next Round ({idx + 2}/{n})')
+                self._btn_finish.setVisible(False)
             else:
-                self._btn_next.setText('🏆  Finish Championship')
+                self._btn_next.setText('▶  Next Season')
+                self._btn_finish.setVisible(True)
+            self._btn_home.setVisible(True)
         else:
             self.setSubTitle(f"Overall standings after 2 races at {wiz.circuit['circuit_name']}.")
             self._info_lbl.setText('')
             self._btn_next.setText('🏁  Finish')
+            self._btn_finish.setVisible(False)
+            self._btn_home.setVisible(False)
 
         # per-round results only make sense across a season
         self._tabs.setTabVisible(3, wiz.mode == 'championship')
 
         self._compute()
 
+        self._in_content    = False
+        self._browse_focus  = 0
+        self._history_saved = False
+        self._tabs.setCurrentIndex(0)
+        self._update_nav_styles()
+
     def handle_key(self, key: int) -> bool:
-        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-            bar = self._tabs.currentWidget().verticalScrollBar()
-            bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
-            return True
-        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
-            # wide Results grid scrolls horizontally
-            bar = self._tabs.currentWidget().horizontalScrollBar()
-            if bar.maximum() > 0:
-                step = max(bar.singleStep(), 52)
-                bar.setValue(bar.value() + (step if key == Qt.Key.Key_Right else -step))
+        K = Qt.Key
+        if self._in_content:
+            if key in (K.Key_Up, K.Key_Down):
+                bar = self._tabs.currentWidget().verticalScrollBar()
+                bar.setValue(bar.value() + (bar.singleStep() if key == K.Key_Down else -bar.singleStep()))
+                return True
+            if key in (K.Key_Left, K.Key_Right):
+                bar = self._tabs.currentWidget().horizontalScrollBar()
+                if bar.maximum() > 0:      # wide Results grid
+                    step = max(bar.singleStep(), 52)
+                    bar.setValue(bar.value() + (step if key == K.Key_Right else -step))
+                return True
+            if key in (K.Key_Escape, K.Key_Backspace,
+                       K.Key_Return, K.Key_Enter, K.Key_Space):
+                # Enter toggles back out too — a dead key here just left the
+                # user stuck with no feedback when they wanted the button
+                self._in_content = False
+                self._update_nav_styles()
                 return True
             return False
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self._has_next_round():
-            self._advance_round()
+
+        # browse mode: ←/→ (or Tab) move across tabs + the action button(s)
+        if key in (K.Key_Left, K.Key_Right, K.Key_Tab):
+            step = -1 if key == K.Key_Left else 1
+            n = self._tabs.count() + self._n_buttons()
+            i = self._browse_focus
+            for _ in range(n):
+                i = (i + step) % n
+                if i >= self._tabs.count() or self._tabs.isTabVisible(i):
+                    break
+            self._browse_focus = i
+            if i < self._tabs.count():
+                self._tabs.setCurrentIndex(i)
+            self._update_nav_styles()
             return True
-        # final round / random mode: fall through -> wizard's global Enter
-        # handler sees nextId() == -1 and finishes
-        return False
+        if key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+            btns = self._nav_buttons()
+            slot = self._browse_focus - self._tabs.count()
+            if 0 <= slot < len(btns):
+                btns[slot].click()
+            else:
+                self._in_content = True
+                self._update_nav_styles()
+            return True
+        return False    # Esc/Backspace fall through -> wizard.back()
+
+    def _nav_buttons(self) -> list:
+        return [b for b in (self._btn_next, self._btn_finish, self._btn_home)
+                if b.isVisibleTo(self)]
+
+    def _n_buttons(self) -> int:
+        return len(self._nav_buttons())
+
+    def _update_nav_styles(self):
+        on_btn = self._browse_focus >= self._tabs.count()
+        if self._in_content:
+            sel = _TAB_SEL_INSIDE
+        elif on_btn:
+            sel = _TAB_SEL_ELSEWHERE
+        else:
+            sel = _TAB_SEL_BROWSE
+        self._tabs.setStyleSheet(_TABS_BASE_SS + f'QTabBar::tab:selected {{ {sel} }}')
+        for slot, btn in enumerate(self._nav_buttons()):
+            focused = (not self._in_content
+                       and self._browse_focus == self._tabs.count() + slot)
+            btn.setStyleSheet(_BTN_FOCUS_SS if focused else _BTN_IDLE_SS)
 
     def nextId(self):
         # The championship loop (Standings -> Practice) is driven by
@@ -184,8 +310,60 @@ class ChampionshipPage(QWizardPage):
     def _on_next_clicked(self):
         if self._has_next_round():
             self._advance_round()
+        elif self._wiz.mode == 'championship':
+            self._next_season()
         else:
-            self._wiz.accept()
+            self._wiz.accept()          # random race: finish -> home
+
+    def _finish_clicked(self):
+        """End the career here: archive the season, nothing left to resume."""
+        self._save_history()
+        self._wiz.clear_season_save()
+        self._wiz.accept()
+
+    def _home_clicked(self):
+        """Save & exit to the home page — the career is not lost.
+
+        Mid-season: banks the round just raced, so CONTINUE resumes at the
+        next one. Season over: archives it and leaves a marker so CONTINUE
+        opens next year's calendar."""
+        wiz = self._wiz
+        if self._has_next_round():
+            self._bank_round()
+            wiz.save_season()
+        else:
+            self._save_history()
+            wiz.save_next_season_marker()
+        wiz.accept()
+
+    def _next_season(self):
+        """Archive the finished season and rewind to the Season Calendar."""
+        wiz = self._wiz
+        self._save_history()
+        # marker instead of a bare clear: if the app closes while the new
+        # calendar is being set up, CONTINUE still offers the next season
+        wiz.save_next_season_marker()
+        wiz.season_year  += 1
+        wiz.circuit_index = 0
+        wiz.all_race_pts  = []
+        wiz.race_pts      = []
+        wiz.race_results  = []
+        while wiz.currentId() not in (wiz.ID_CALENDAR, wiz.startId()):
+            wiz.back()
+        if wiz.currentId() == wiz.ID_CALENDAR:
+            # skip the New/Continue menu — the career carries straight on
+            wiz.currentPage().begin_followup_season()
+
+    def _bank_round(self):
+        """Fold the just-raced round into the season totals."""
+        wiz = self._wiz
+        wiz.all_race_pts.extend(wiz.race_pts)
+        wiz.race_pts = []
+        wiz.round_results.append({'circuit': wiz.circuit['circuit_name'],
+                                  'country': wiz.circuit['country'],
+                                  'races': wiz.race_results})
+        wiz.race_results = []
+        wiz.circuit_index += 1
 
     def _advance_round(self):
         """Bank this round's points and rewind the wizard to Practice.
@@ -195,17 +373,68 @@ class ChampionshipPage(QWizardPage):
         re-initializing it (back() itself never calls initializePage).
         """
         wiz = self._wiz
-        wiz.all_race_pts.extend(wiz.race_pts)
-        wiz.race_pts = []
-        wiz.round_results.append({'circuit': wiz.circuit['circuit_name'],
-                                  'country': wiz.circuit['country'],
-                                  'races': wiz.race_results})
-        wiz.race_results = []
-        wiz.circuit_index += 1
+        self._bank_round()
+        wiz.save_season()               # resume point: start of the next round
         while wiz.currentId() not in (wiz.ID_PRACTICE, wiz.startId()):
             wiz.back()
         if wiz.currentId() == wiz.ID_PRACTICE:
             wiz.currentPage().initializePage()
+
+    # ── History ───────────────────────────────────────────────────────────────
+
+    def _season_rounds(self):
+        """Banked rounds + the current (not yet banked) one."""
+        wiz = self._wiz
+        rounds = list(wiz.round_results)
+        if wiz.race_results:
+            rounds.append({'circuit': wiz.circuit['circuit_name'],
+                           'country': wiz.circuit['country'],
+                           'races': wiz.race_results})
+        return rounds
+
+    def _save_history(self):
+        """Append the finished season to data/history.json (once)."""
+        wiz = self._wiz
+        if self._history_saved or wiz.mode != 'championship' or self._rider_total is None:
+            return
+        rounds = self._season_rounds()
+
+        stats = {}
+        for rd in rounds:
+            for df in rd['races']:
+                for _, r in df.iterrows():
+                    s = stats.setdefault(r['name'],
+                                         {'wins': 0, 'podiums': 0, 'dnfs': 0, 'races': 0})
+                    s['races'] += 1
+                    if bool(r['dnf']):
+                        s['dnfs'] += 1
+                    else:
+                        pos = int(r['pos'])
+                        s['wins']    += pos == 1
+                        s['podiums'] += pos <= 3
+
+        standings = [{'name': str(r['name']), 'team': str(r['team']),
+                      'manufacturer': str(r['manufacturer']), 'points': int(r['points'])}
+                     for _, r in self._rider_total.iterrows()]
+
+        entry = {
+            'year':      wiz.season_year,
+            'rounds':    len(rounds),
+            'calendar':  [str(rd['circuit']) for rd in rounds],
+            'champion':  standings[0] if standings else None,
+            'standings': standings,
+            'stats':     stats,
+        }
+
+        data = {'seasons': []}
+        if _HISTORY.exists():
+            try:
+                data = json.loads(_HISTORY.read_text(encoding='utf-8'))
+            except (json.JSONDecodeError, OSError):
+                pass                       # corrupt file -> start a fresh log
+        data.setdefault('seasons', []).append(entry)
+        _HISTORY.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        self._history_saved = True
 
     # ── Data ─────────────────────────────────────────────────────────────────
 

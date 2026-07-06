@@ -37,6 +37,42 @@ _WHITE = QColor(235, 235, 248)
 # their background — used for grid-like cells (e.g. the season Results matrix)
 GRID_ROLE = Qt.ItemDataRole.UserRole + 1
 
+# ── Session-page chrome ───────────────────────────────────────────────────────
+# Run buttons: the enabled one (= what Enter triggers) pops in accent red,
+# disabled ones recede — pressing keys blind was impossible to follow.
+SESSION_BTN_SS = """
+    QPushButton {
+        background: #e02840;
+        color: #ffffff;
+        border: 1px solid #ff6080;
+        border-radius: 6px;
+        padding: 0 18px;
+        font-weight: 600;
+    }
+    QPushButton:disabled {
+        background: #17171f;
+        color: #4a4a5a;
+        border: 1px solid #222230;
+    }
+"""
+
+# Tabs: selected = white text on a red underline; the rest stay dim.
+SESSION_TABS_SS = """
+    QTabWidget::pane { border: none; }
+    QTabBar::tab {
+        background: transparent;
+        color: #666677;
+        padding: 8px 20px;
+        border: none;
+        border-bottom: 2px solid transparent;
+        font-weight: 600;
+    }
+    QTabBar::tab:selected {
+        color: #ffffff;
+        border-bottom: 2px solid #e02840;
+    }
+"""
+
 
 def row_bg(color: QColor) -> QColor:
     """Dark manufacturer-tinted row background — 55 % manufacturer + 45 % base."""

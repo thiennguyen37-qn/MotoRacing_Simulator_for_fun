@@ -23,3 +23,7 @@ desktop.ini
 audio/music/*.mp3
 audio/music/*.ogg
 audio/music/*.wav
+
+# Player data (championship archive + mid-season save)
+data/history.json
+data/season_save.json

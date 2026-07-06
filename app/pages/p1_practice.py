@@ -3,7 +3,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
 
 from src.simulator import run_practice
-from app.widgets.table_utils import make_table, fill_table
+from app.widgets.table_utils import make_table, fill_table, SESSION_BTN_SS
 
 HEADERS = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'BEST LAP', 'GAP']
 
@@ -22,6 +22,9 @@ class PracticePage(QWizardPage):
         ctrl = QHBoxLayout()
         self._btn = QPushButton('▶  Run Practice Session')
         self._btn.setFixedHeight(36)
+        self._btn.setStyleSheet(SESSION_BTN_SS)
+        self._btn.setAutoDefault(False)
+        self._btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn.clicked.connect(self._run)
         self._status = QLabel('')
         ctrl.addWidget(self._btn)
@@ -36,7 +39,10 @@ class PracticePage(QWizardPage):
             bar = self._table.verticalScrollBar()
             bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
             return True
-        return False
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self._btn.isEnabled():
+            self._btn.click()
+            return True
+        return False    # session done -> global Enter advances the page
 
     def initializePage(self):
         wiz = self._wiz
@@ -50,7 +56,8 @@ class PracticePage(QWizardPage):
             wiz.race_pts         = []
             wiz.race_results     = []
             n = len(season)
-            self.setSubTitle(f"Round {idx + 1}/{n}  —  {wiz.circuit['circuit_name']}  ({wiz.circuit['country']})")
+            self.setSubTitle(f"{wiz.season_year} World Championship  ·  "
+                             f"Round {idx + 1}/{n}  —  {wiz.circuit['circuit_name']}  ({wiz.circuit['country']})")
         else:
             self.setSubTitle('Simulate the free practice session.')
 

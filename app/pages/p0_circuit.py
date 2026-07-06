@@ -16,7 +16,7 @@ _BG = next((p for p in (_IMAGES / 'circuit_bg.jpg', _IMAGES / 'homepage.jpg')
 def _caps_label(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setFont(QFont('Segoe UI', 8, QFont.Weight.Bold))
-    lbl.setStyleSheet('color: #666677; letter-spacing: 3px; background: transparent; border: none;')
+    lbl.setStyleSheet('color: #FFFFFF; letter-spacing: 3px; background: transparent; border: none;')
     return lbl
 
 
@@ -32,16 +32,9 @@ class CircuitPage(QWizardPage):
         root.setContentsMargins(36, 28, 36, 28)
         root.setSpacing(0)
 
-        # ── Header ────────────────────────────────────────────────────────────
-        hdr = QLabel('SELECT CIRCUIT')
-        hdr.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
-        hdr.setStyleSheet('color: #e02840; letter-spacing: 3px; background: transparent; border: none;')
-        root.addWidget(hdr)
-        root.addSpacing(4)
-
         sub = QLabel('Choose the circuit for this race weekend')
-        sub.setFont(QFont('Segoe UI', 9))
-        sub.setStyleSheet('color: #666677; background: transparent; border: none;')
+        sub.setFont(QFont('Segoe UI', 12))
+        sub.setStyleSheet('color: #FFFFFF; background: transparent; border: none;')
         root.addWidget(sub)
         root.addSpacing(12)
 

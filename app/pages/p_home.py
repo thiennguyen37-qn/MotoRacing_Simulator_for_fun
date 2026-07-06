@@ -236,16 +236,18 @@ class HomePage(QWizardPage):
         pl.addStretch(1)
 
         self._bar_r = ModeBar('RANDOM RACE',  'Pick any circuit for a single weekend')
-        self._bar_c = ModeBar('CHAMPIONSHIP', 'All 13 rounds — full season')
+        self._bar_c = ModeBar('CHAMPIONSHIP', 'Arrange a calendar and run a full season')
+        self._bar_h = ModeBar('CHAMPIONSHIP HISTORY', 'Past champions and all-time rider records')
         self._bar_g = ModeBar('GALLERY',      'Browse rider and team profiles')
         self._bar_s = ModeBar('SOUNDTRACK',   'Browse and play music tracks')
         self._bar_x = ModeBar('EXIT',         'Close the application', danger=True)
-        self._bars  = [self._bar_r, self._bar_c, self._bar_g, self._bar_s, self._bar_x]
-        self._modes = ['random', 'championship', 'gallery', 'soundtrack', 'exit']
+        self._bars  = [self._bar_r, self._bar_c, self._bar_h, self._bar_g, self._bar_s, self._bar_x]
+        self._modes = ['random', 'championship', 'history', 'gallery', 'soundtrack', 'exit']
         self._focus_idx = 0
 
         self._bar_r.clicked.connect(lambda: self._select('random'))
         self._bar_c.clicked.connect(lambda: self._select('championship'))
+        self._bar_h.clicked.connect(lambda: self._select('history'))
         self._bar_g.clicked.connect(lambda: self._select('gallery'))
         self._bar_s.clicked.connect(lambda: self._select('soundtrack'))
         self._bar_x.clicked.connect(self._confirm_exit)
@@ -253,6 +255,8 @@ class HomePage(QWizardPage):
         pl.addWidget(self._bar_r)
         pl.addSpacing(10)
         pl.addWidget(self._bar_c)
+        pl.addSpacing(10)
+        pl.addWidget(self._bar_h)
         pl.addSpacing(10)
         pl.addWidget(self._bar_g)
         pl.addSpacing(10)
@@ -294,6 +298,8 @@ class HomePage(QWizardPage):
         wiz.mode          = None
         wiz.circuit_index = 0
         wiz.all_race_pts  = []
+        from app.wizard import START_YEAR
+        wiz.season_year   = START_YEAR
         for bar in self._bars:
             bar.set_selected(False)
             bar.set_focused(False)
@@ -321,6 +327,7 @@ class HomePage(QWizardPage):
         self._wiz.mode = mode
         self._bar_r.set_selected(mode == 'random')
         self._bar_c.set_selected(mode == 'championship')
+        self._bar_h.set_selected(mode == 'history')
         self._bar_g.set_selected(mode == 'gallery')
         self._bar_s.set_selected(mode == 'soundtrack')
         self._bar_x.set_selected(False)
@@ -341,6 +348,8 @@ class HomePage(QWizardPage):
     def nextId(self):
         if self._wiz.mode == 'championship':
             return self._wiz.ID_CALENDAR
+        if self._wiz.mode == 'history':
+            return self._wiz.ID_HISTORY
         if self._wiz.mode == 'gallery':
             return self._wiz.ID_GALLERY
         if self._wiz.mode == 'soundtrack':

@@ -5,7 +5,8 @@ from PyQt6.QtCore import Qt, QTimer, QVariantAnimation, QEasingCurve
 
 from src.simulator import run_race
 from PyQt6.QtWidgets import QHeaderView
-from app.widgets.table_utils import make_table, TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR, row_bg, _is_time
+from app.widgets.table_utils import (make_table, TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR,
+                                      row_bg, _is_time, SESSION_BTN_SS, SESSION_TABS_SS)
 
 HEADERS = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'RACE TIME', 'GAP']
 
@@ -122,9 +123,15 @@ class RacePage(QWizardPage):
         ctrl = QHBoxLayout()
         self._btn_r1 = QPushButton('▶  Run Race 1')
         self._btn_r1.setFixedHeight(34)
+        self._btn_r1.setStyleSheet(SESSION_BTN_SS)
+        self._btn_r1.setAutoDefault(False)
+        self._btn_r1.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_r1.clicked.connect(lambda: self._run(1))
         self._btn_r2 = QPushButton('▶  Run Race 2')
         self._btn_r2.setFixedHeight(34)
+        self._btn_r2.setStyleSheet(SESSION_BTN_SS)
+        self._btn_r2.setAutoDefault(False)
+        self._btn_r2.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_r2.setEnabled(False)
         self._btn_r2.clicked.connect(lambda: self._run(2))
         self._status = QLabel('')
@@ -134,6 +141,7 @@ class RacePage(QWizardPage):
         layout.addLayout(ctrl)
 
         self._tabs = QTabWidget()
+        self._tabs.setStyleSheet(SESSION_TABS_SS)
         self._t_r1 = make_table(HEADERS)
         self._t_r2 = make_table(HEADERS)
         self._tabs.addTab(self._t_r1, 'Race 1')
@@ -145,6 +153,17 @@ class RacePage(QWizardPage):
             bar = self._tabs.currentWidget().verticalScrollBar()
             bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
             return True
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            step = 1 if key == Qt.Key.Key_Right else -1
+            self._tabs.setCurrentIndex((self._tabs.currentIndex() + step) % self._tabs.count())
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # Enter drives the highlighted (enabled) run button
+            for btn in (self._btn_r1, self._btn_r2):
+                if btn.isEnabled():
+                    btn.click()
+                    return True
+            return False    # both races done -> global Enter advances
         return False
 
     def initializePage(self):

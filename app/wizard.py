@@ -224,9 +224,12 @@ class MotoWizard(QWizard):
         return False
 
     def closeEvent(self, event):
+        # NOTE: no auto-save here. Every field the season save captures only
+        # changes at round boundaries, where an explicit save already fires
+        # (season start, round advance, the Home button). Saving on exit used
+        # to clobber the pending-next-season marker with stale wizard state.
         from app.pages.p_home import ExitDialog
         if ExitDialog(self).exec() == QDialog.DialogCode.Accepted:
-            self.save_season()      # resume mid-season on next launch
             event.accept()
         else:
             event.ignore()
@@ -235,9 +238,9 @@ class MotoWizard(QWizard):
 
     def save_season(self):
         """Snapshot the running championship (at round granularity) so the
-        player can continue after restarting the app. Also called on every
-        round advance, so quitting by any route loses at most the round in
-        progress."""
+        player can continue after restarting the app. Called explicitly at
+        season start, on every round advance and by the Home button — never
+        blindly on exit (stale wizard state must not overwrite the file)."""
         if self.mode != 'championship' or self.season_df is None:
             return
         data = {

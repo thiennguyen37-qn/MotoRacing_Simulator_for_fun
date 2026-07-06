@@ -393,9 +393,13 @@ class ChampionshipPage(QWizardPage):
         return rounds
 
     def _save_history(self):
-        """Append the finished season to data/history.json (once)."""
+        """Append the finished season to data/history.json (once).
+
+        Hard invariant: only a season that is definitely over may be
+        archived — enforced here, not just at the call sites."""
         wiz = self._wiz
-        if self._history_saved or wiz.mode != 'championship' or self._rider_total is None:
+        if (self._history_saved or wiz.mode != 'championship'
+                or self._rider_total is None or self._has_next_round()):
             return
         rounds = self._season_rounds()
 

@@ -339,8 +339,11 @@ class HomePage(QWizardPage):
         self._bars[self._focus_idx].set_focused(True)
 
     def _confirm_exit(self):
-        if ExitDialog(self).exec() == QDialog.DialogCode.Accepted:
-            QApplication.instance().quit()
+        # The single "Do you want to exit?" confirmation lives in
+        # MotoWizard.closeEvent (it also covers the window X button and
+        # Alt+F4). Since Qt 6.5, QApplication.quit() closes windows first —
+        # so showing a dialog here produced the confirmation twice.
+        self._wiz.close()
 
     def isComplete(self):
         return self._wiz.mode is not None

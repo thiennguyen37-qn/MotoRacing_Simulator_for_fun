@@ -33,6 +33,10 @@ _DEFAULT_COLOR = QColor(38, 38, 58)
 _BG = (12, 12, 18)  # #0c0c12
 _WHITE = QColor(235, 235, 248)
 
+# Items carrying this role (bool True) are painted with a black frame around
+# their background — used for grid-like cells (e.g. the season Results matrix)
+GRID_ROLE = Qt.ItemDataRole.UserRole + 1
+
 
 def row_bg(color: QColor) -> QColor:
     """Dark manufacturer-tinted row background — 55 % manufacturer + 45 % base."""
@@ -64,7 +68,14 @@ class _BgDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         # Background
         bg = index.data(Qt.ItemDataRole.BackgroundRole)
-        painter.fillRect(option.rect, bg if bg is not None else QBrush(QColor(*_BG)))
+        if index.data(GRID_ROLE):
+            # black frame: fill black, inset the colour by 1px on every side
+            # (adjacent grid cells end up separated by a 2px black line)
+            painter.fillRect(option.rect, QColor(0, 0, 0))
+            painter.fillRect(option.rect.adjusted(1, 1, -1, -1),
+                             bg if bg is not None else QBrush(QColor(*_BG)))
+        else:
+            painter.fillRect(option.rect, bg if bg is not None else QBrush(QColor(*_BG)))
 
         # Left accent bar (column 0 only)
         if index.column() == 0:
@@ -133,6 +144,17 @@ _TABLE_SS = """
         border-radius: 3px;
         min-height: 20px;
     }
+    QScrollBar:horizontal {
+        background: #0c0c12;
+        height: 6px;
+        border: none;
+    }
+    QScrollBar::handle:horizontal {
+        background: #2a2a40;
+        border-radius: 3px;
+        min-width: 20px;
+    }
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 """
 
 

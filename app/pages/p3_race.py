@@ -159,7 +159,8 @@ class RacePage(QWizardPage):
         self._status.setText('')
         self._t_r1.setRowCount(0)
         self._t_r2.setRowCount(0)
-        self._wiz.race_pts = []
+        self._wiz.race_pts     = []
+        self._wiz.race_results = []
         self.completeChanged.emit()
 
     def _run(self, race_num):
@@ -173,6 +174,7 @@ class RacePage(QWizardPage):
             self._wiz.df, self._wiz.circuit, self._wiz.grid_all_df
         )
         self._wiz.race_pts.append(pts_df)
+        self._wiz.race_results.append(result_df[['name', 'pos', 'dnf']].copy())
 
         table = self._t_r1 if race_num == 1 else self._t_r2
         reveal = _fill(table, result_df, meta)

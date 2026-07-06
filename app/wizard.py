@@ -62,11 +62,18 @@ class MotoWizard(QWizard):
         self.circuit_index = 0
         self.all_race_pts  = []
 
+        # Championship season order (set by CalendarPage)
+        self.season_df = None
+        # Finished rounds: [{'circuit': name, 'country': ..., 'races': [df, df]}]
+        # where each df holds [name, pos, dnf] — feeds the Results tab
+        self.round_results = []
+
         # Per-circuit state (reset each circuit)
         self.circuit          = None
         self.practice_results = None
         self.grid_all_df      = None
         self.race_pts         = []
+        self.race_results     = []   # current round's per-race classifications
 
         # Audio — created before pages so SoundtrackPage can receive the reference
         self._audio = AudioManager()
@@ -76,6 +83,7 @@ class MotoWizard(QWizard):
 
         # Pages — IDs are assigned in addPage order
         from app.pages.p_home          import HomePage
+        from app.pages.p_calendar      import CalendarPage
         from app.pages.p0_circuit      import CircuitPage
         from app.pages.p1_practice     import PracticePage
         from app.pages.p2_qualifying   import QualifyingPage
@@ -85,6 +93,7 @@ class MotoWizard(QWizard):
         from app.pages.p_soundtrack    import SoundtrackPage
 
         self.ID_HOME       = self.addPage(HomePage(self))
+        self.ID_CALENDAR   = self.addPage(CalendarPage(self))
         self.ID_CIRCUIT    = self.addPage(CircuitPage(self))
         self.ID_PRACTICE   = self.addPage(PracticePage(self))
         self.ID_QUALI      = self.addPage(QualifyingPage(self))
@@ -93,7 +102,11 @@ class MotoWizard(QWizard):
         self.ID_GALLERY    = self.addPage(GalleryPage(self))
         self.ID_SOUNDTRACK = self.addPage(SoundtrackPage(self, self._audio))
 
-        self.setOption(QWizard.WizardOption.IndependentPages)
+        # NOTE: IndependentPages is deliberately NOT set — the championship
+        # loops Practice -> ... -> Standings -> Practice, and with that option
+        # revisited pages would never run initializePage again (stale data).
+        # Default cleanupPage is a no-op here (no registered fields), so going
+        # back is still lossless.
 
         self.setButtonText(QWizard.WizardButton.NextButton,   'Continue →')
         self.setButtonText(QWizard.WizardButton.FinishButton, 'Finish')
@@ -150,11 +163,10 @@ class MotoWizard(QWizard):
         pass  # prevent Escape from closing the wizard
 
     def accept(self):
-        if self.mode == 'random':
-            self.restart()
-            self.page(self.ID_HOME).initializePage()
-        else:
-            super().accept()
+        """Finishing any mode returns to the home page — the app only exits
+        via the EXIT bar or the window close button."""
+        self.restart()
+        self.page(self.ID_HOME).initializePage()
 
     def eventFilter(self, obj, event):
         # keep the gap filler glued to the page bottom whenever QWizard

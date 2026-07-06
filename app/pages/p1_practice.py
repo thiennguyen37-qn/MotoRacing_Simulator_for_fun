@@ -43,11 +43,13 @@ class PracticePage(QWizardPage):
         # Championship: auto-select current circuit from index
         if wiz.mode == 'championship':
             idx = wiz.circuit_index
-            wiz.circuit     = wiz.circuits_df.iloc[idx]
+            season = wiz.season_df if wiz.season_df is not None else wiz.circuits_df
+            wiz.circuit     = season.iloc[idx]
             wiz.practice_results = None
             wiz.grid_all_df      = None
             wiz.race_pts         = []
-            n = len(wiz.circuits_df)
+            wiz.race_results     = []
+            n = len(season)
             self.setSubTitle(f"Round {idx + 1}/{n}  —  {wiz.circuit['circuit_name']}  ({wiz.circuit['country']})")
         else:
             self.setSubTitle('Simulate the free practice session.')

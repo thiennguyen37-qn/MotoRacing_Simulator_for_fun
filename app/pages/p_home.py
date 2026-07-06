@@ -340,7 +340,7 @@ class HomePage(QWizardPage):
 
     def nextId(self):
         if self._wiz.mode == 'championship':
-            return self._wiz.ID_PRACTICE
+            return self._wiz.ID_CALENDAR
         if self._wiz.mode == 'gallery':
             return self._wiz.ID_GALLERY
         if self._wiz.mode == 'soundtrack':

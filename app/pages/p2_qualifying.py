@@ -141,7 +141,7 @@ class QualifyingPage(QWizardPage):
                                row['team'], row['manufacturer'], row['best_lap']])
         fill_table(self._t_gr, grid_rows)
 
-        # Build grid_all_df for race notebook
+        # Build grid_all_df for the race session
         import pandas as pd
         grid_all = pd.concat([q2, nq]).reset_index(drop=True)
         grid_all['grid_pos'] = range(1, len(grid_all) + 1)

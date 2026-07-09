@@ -1,5 +1,5 @@
 """
-Simulation engine — shared across Practice, Qualifying, and Race notebooks.
+Simulation engine — shared across the Practice, Qualifying, and Race sessions.
 """
 
 import numpy as np

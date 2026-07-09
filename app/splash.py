@@ -1,6 +1,6 @@
 from pathlib import Path
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtGui import QFont, QColor, QPainter, QBrush, QPen, QPixmap, QLinearGradient
+from PyQt6.QtGui import QFont, QColor, QPainter, QPixmap
 from PyQt6.QtCore import (Qt, QPropertyAnimation, QEasingCurve, QRectF, QTimer,
                            pyqtSignal, pyqtProperty)
 
@@ -102,28 +102,10 @@ class SplashScreen(QWidget):
         else:
             p.fillRect(self.rect(), QColor(8, 8, 14))
 
-        # darkening overlay — heavier toward the bottom where the bar sits
-        grad = QLinearGradient(0, 0, 0, H)
-        grad.setColorAt(0.0, QColor(6, 6, 12, 150))
-        grad.setColorAt(0.55, QColor(6, 6, 12, 120))
-        grad.setColorAt(1.0, QColor(4, 4, 10, 230))
-        p.fillRect(self.rect(), QBrush(grad))
-
-        # title
-        cx = W / 2
-        p.setPen(QColor(240, 240, 248))
-        p.setFont(QFont('Segoe UI', 40, QFont.Weight.Bold))
-        title_rect = QRectF(0, H * 0.5 - 90, W, 60)
-        p.drawText(title_rect, Qt.AlignmentFlag.AlignCenter, 'MotoRacing Simulator')
-
-        p.setPen(QColor(200, 60, 80))
-        f = QFont('Segoe UI', 12, QFont.Weight.Bold)
-        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 4)
-        p.setFont(f)
-        p.drawText(QRectF(0, H * 0.5 - 24, W, 24),
-                   Qt.AlignmentFlag.AlignCenter, 'WORLD CHAMPIONSHIP')
+        # (no darkening overlay, no title/subtitle — just wallpaper + progress)
 
         # progress bar
+        cx = W / 2
         bar_w = min(560, W * 0.42)
         bar_h = 6
         bx, by = cx - bar_w / 2, H * 0.78

@@ -11,8 +11,20 @@ _MENU_DIR = Path(__file__).parent.parent.parent / 'images' / 'menu'
 
 # bottom status bar (option subtitle) — near-solid black, sized to ~2x the text
 _BAND_CSS   = 'rgba(6, 6, 10, 235)'
-_SBAR_PT    = 10       # subtitle font size
-_SBAR_H     = 34       # bar thickness ≈ 2x the text height
+_SBAR_PT    = 11       # subtitle font size
+_SBAR_H     = 36       # bar thickness ≈ 2x the text height
+# modern, motorsport-flavoured face for the uppercase subtitle (Bahnschrift is
+# a DIN-style font bundled with Windows 10/11; Segoe UI is the fallback)
+_SBAR_FAMILIES = ['Bahnschrift SemiBold', 'Bahnschrift', 'Segoe UI Semibold', 'Segoe UI']
+
+
+def _statusbar_font() -> QFont:
+    f = QFont()
+    f.setFamilies(_SBAR_FAMILIES)
+    f.setPointSize(_SBAR_PT)
+    f.setBold(True)
+    f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
+    return f
 
 
 def _load_logo(key: str) -> QPixmap | None:
@@ -207,26 +219,12 @@ class HomePage(QWizardPage):
         self._subs  = {m[0]: m[2] for m in _MODES}
         self._focus_idx = 0
 
-        # ── Title top, tiles + subtitle band along the bottom ────────────────
-        # The home video plays at its original colour (no darkening overlay);
-        # the focused option's subtitle sits in a solid black band instead, so
-        # it stays readable without dimming the footage.
+        # ── Tiles + subtitle band along the bottom, over the raw video ───────
+        # No title/overlay — just the video, the tile row, and the focused
+        # option's subtitle in a slim black status bar at the very bottom.
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
-        ttl = QLabel('MotoRacing Simulator')
-        ttl.setFont(QFont('Segoe UI', 30, QFont.Weight.Bold))
-        ttl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ttl.setStyleSheet('color: #ffffff; background: transparent; border: none;')
-        root.addWidget(ttl)
-        root.addSpacing(6)
-
-        tag = QLabel('2026  ·  WORLD CHAMPIONSHIP')
-        tag.setFont(QFont('Segoe UI', 12))
-        tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tag.setStyleSheet('color: #ffffff; letter-spacing: 3px; background: transparent; border: none;')
-        root.addWidget(tag)
 
         root.addStretch(1)
 
@@ -249,7 +247,7 @@ class HomePage(QWizardPage):
         # spans the full width and sits flush at the true window bottom (over
         # the strip QWizard reserves). Text is centred inside it.
         self._desc = QLabel(self._wiz)
-        self._desc.setFont(QFont('Segoe UI', _SBAR_PT))
+        self._desc.setFont(_statusbar_font())
         self._desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._desc.setStyleSheet(
             f'background: {_BAND_CSS}; color: #ffffff; border: none;')
@@ -310,7 +308,7 @@ class HomePage(QWizardPage):
         self._focus_idx = idx % len(self._tiles)
         for i, tile in enumerate(self._tiles):
             tile.set_focused(i == self._focus_idx)
-        self._desc.setText(self._subs[self._modes[self._focus_idx]])
+        self._desc.setText(self._subs[self._modes[self._focus_idx]].upper())
 
     def handle_key(self, key: int) -> bool:
         if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):

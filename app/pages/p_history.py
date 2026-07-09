@@ -134,12 +134,13 @@ class HistoryPage(QWizardPage):
 
         order = sorted(agg.items(),
                        key=lambda kv: (-kv[1]['titles'], -kv[1]['wins'], -kv[1]['pts']))
+        # cols 0 + 3..7 are numeric — centre them under their headers
         fill_table(self._t_overall, [
             [i + 1, name, a['team'], a['seasons'], a['titles'],
              a['wins'], a['podiums'], a['pts']]
             for i, (name, a) in enumerate(order)
         ], team_col_idx=2, manu_col_idx=None, num_col_idx=None,
-           name_col_idx=1, stretch_col=2)
+           name_col_idx=1, stretch_col=2, center_cols={0, 3, 4, 5, 6, 7})
 
     def _fill_seasons(self, seasons):
         rows = []
@@ -150,6 +151,9 @@ class HistoryPage(QWizardPage):
                          champ.get('name', '—'), champ.get('team', '—'),
                          champ.get('manufacturer', '—'), wins,
                          champ.get('points', 0)])
+        # col 0 = SEASON (year) needs a wider slot than the default rank column;
+        # centre the numeric columns (season / rounds / wins / pts)
         fill_table(self._t_seasons, rows,
                    team_col_idx=3, manu_col_idx=4, num_col_idx=None,
-                   name_col_idx=2, stretch_col=3)
+                   name_col_idx=2, stretch_col=3,
+                   center_cols={0, 1, 5, 6}, col0_width=96)

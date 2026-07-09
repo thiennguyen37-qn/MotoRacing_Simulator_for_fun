@@ -76,7 +76,7 @@ class _FlagHeaderView(QHeaderView):
 
     _BGC  = QColor('#0c0c12')
     _LINE = QColor('#1c1c2c')
-    _TXT  = QColor('#444455')
+    _TXT  = QColor('#ffffff')
 
     def __init__(self, parent=None):
         super().__init__(Qt.Orientation.Horizontal, parent)

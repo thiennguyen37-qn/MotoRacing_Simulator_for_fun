@@ -161,7 +161,7 @@ _TABLE_SS = """
     }
     QHeaderView::section {
         background: #0c0c12;
-        color: #444455;
+        color: #ffffff;
         border: none;
         border-bottom: 1px solid #1c1c2c;
         padding: 8px 12px;
@@ -222,8 +222,11 @@ def fill_table(
     num_col_idx:  int | None = 1,
     name_col_idx: int | None = 2,   # rider/entity name → BOLD + UPPERCASE
     stretch_col:  int | None = 3,   # column that expands to fill remaining width
+    center_cols:  set[int] | None = None,  # centre these columns' cells + header
+    col0_width:   int | None = 56,  # fixed width for col 0 (None = fit contents)
 ):
     table.setRowCount(len(rows))
+    center_cols = center_cols or set()
 
     for r, row_data in enumerate(rows):
         color = None
@@ -269,10 +272,20 @@ def fill_table(
                 item.setForeground(QBrush(_WHITE))
                 item.setFont(QFont('Segoe UI', 10))
 
+            if c in center_cols:
+                item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+
             table.setItem(r, c, item)
 
+    # centre the matching header labels so numbers sit under their titles
+    for c in center_cols:
+        h = table.horizontalHeaderItem(c)
+        if h is not None:
+            h.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+
     table.resizeColumnsToContents()
-    table.setColumnWidth(0, 56)
+    if col0_width is not None:
+        table.setColumnWidth(0, col0_width)
     if num_col_idx is not None:
         table.setColumnWidth(num_col_idx, 56)
 

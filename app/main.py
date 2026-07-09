@@ -8,7 +8,7 @@ os.environ['QT_LOGGING_RULES'] = 'qt.multimedia.ffmpeg=false;qt.multimedia=false
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPalette, QColor, QFont
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 
 from app.wizard import MotoWizard
 from app.splash import SplashScreen
@@ -42,12 +42,35 @@ def main():
     app.setPalette(_dark_palette())
     app.setFont(QFont('Segoe UI', 10))
 
+    # Show the loading screen first, then build the (heavy) wizard while the
+    # progress bar reflects real init work. The build runs once the event loop
+    # is up (so the splash has painted); set_progress repaints synchronously.
+    splash = SplashScreen()
+    splash.show()
+
     wizard = MotoWizard()
 
-    splash = SplashScreen()
-    splash.finished.connect(wizard.show)
-    splash.show()
-    splash.start()
+    def on_built():
+        # Reveal the wizard *behind* the still-opaque splash, then let the
+        # splash fill to 100% and fade out — a clean crossfade with no gap.
+        # Borderless-fullscreen (frameless + full screen geometry) rather than
+        # showFullScreen(): the latter fights the topmost fullscreen splash and
+        # can end up not covering the whole screen.
+        geo = QApplication.primaryScreen().geometry()
+        wizard.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        wizard.setGeometry(geo)
+        wizard.show()
+        splash.raise_()
+        splash.complete()
+
+    def on_finished():
+        splash.hide()
+        wizard.raise_()
+        wizard.activateWindow()
+
+    splash.finished.connect(on_finished)
+    QTimer.singleShot(60, lambda: wizard.build(progress=splash.set_progress,
+                                               done=on_built))
 
     sys.exit(app.exec())
 

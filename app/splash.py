@@ -1,30 +1,19 @@
-from PyQt6.QtWidgets import QWidget, QLabel, QFrame, QApplication, QGraphicsOpacityEffect
-from PyQt6.QtGui import QFont, QColor, QPainter, QBrush
-from PyQt6.QtCore import (Qt, QPropertyAnimation, QSequentialAnimationGroup,
-                           QParallelAnimationGroup, QRect, QEasingCurve, pyqtSignal)
+from pathlib import Path
+from PyQt6.QtWidgets import QWidget, QApplication
+from PyQt6.QtGui import QFont, QColor, QPainter, QBrush, QPen, QPixmap, QLinearGradient
+from PyQt6.QtCore import (Qt, QPropertyAnimation, QEasingCurve, QRectF, QTimer,
+                           pyqtSignal, pyqtProperty)
 
-W, H = 860, 480
-
-
-def _opacity_anim(effect, duration, start, end, curve=QEasingCurve.Type.OutCubic):
-    a = QPropertyAnimation(effect, b'opacity')
-    a.setDuration(duration)
-    a.setStartValue(float(start))
-    a.setEndValue(float(end))
-    a.setEasingCurve(curve)
-    return a
-
-
-def _geom_anim(widget, duration, start: QRect, end: QRect, curve=QEasingCurve.Type.OutCubic):
-    a = QPropertyAnimation(widget, b'geometry')
-    a.setDuration(duration)
-    a.setStartValue(start)
-    a.setEndValue(end)
-    a.setEasingCurve(curve)
-    return a
+_IMAGES = Path(__file__).parent.parent / 'images'
+# dedicated wallpaper wins; falls back to the homepage photo until one is added
+_WALL = next((p for p in (_IMAGES / 'splash.jpg', _IMAGES / 'splash.png',
+                          _IMAGES / 'homepage.jpg') if p.exists()), None)
 
 
 class SplashScreen(QWidget):
+    """Full-screen loading screen: wallpaper + a progress bar that fills as the
+    app initialises, then fades out into the home page."""
+
     finished = pyqtSignal()
 
     def __init__(self):
@@ -33,128 +22,127 @@ class SplashScreen(QWidget):
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(W, H)
+        self.setWindowTitle('MotoRacing Simulator')
+        self.setGeometry(QApplication.primaryScreen().geometry())   # full screen
 
-        geo = QApplication.primaryScreen().availableGeometry()
-        self.move(geo.center().x() - W // 2, geo.center().y() - H // 2)
+        self._wall = QPixmap(str(_WALL)) if _WALL else QPixmap()
+        self._target  = 0.0     # real progress 0..1
+        self._display = 0.0     # animated value the bar actually draws
+        self._label   = 'Loading…'
+        self._done    = False
 
-        # Background
-        bg = QFrame(self)
-        bg.setGeometry(0, 0, W, H)
-        bg.setStyleSheet('background-color: #08080e; border-radius: 14px;')
+        self._bar_anim = QPropertyAnimation(self, b'display')
+        self._bar_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        # Top / bottom accent bars
-        QFrame(self).setGeometry(0, 0, W, 4)
-        self.findChildren(QFrame)[-1].setStyleSheet(
-            'background: qlineargradient(x1:0,y1:0,x2:1,y2:0,'
-            'stop:0 transparent, stop:0.2 #e02840, stop:0.8 #e02840, stop:1 transparent);'
-        )
-        QFrame(self).setGeometry(0, H - 4, W, 4)
-        self.findChildren(QFrame)[-1].setStyleSheet(
-            'background: qlineargradient(x1:0,y1:0,x2:1,y2:0,'
-            'stop:0 transparent, stop:0.2 #e02840, stop:0.8 #e02840, stop:1 transparent);'
-        )
+    # ── animated bar value ─────────────────────────────────────────────────────
 
-        # Icon
-        self._icon = QLabel('🏁', self)
-        self._icon.setFont(QFont('Segoe UI Emoji', 54))
-        self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._icon.setGeometry(W // 2 - 64, 130, 128, 96)
+    def _get_display(self) -> float:
+        return self._display
 
-        # Title
-        self._title = QLabel('MotoRacing Simulator', self)
-        f = QFont('Segoe UI', 28, QFont.Weight.Bold)
-        self._title.setFont(f)
-        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._title.setStyleSheet('color: #f0f0f8;')
-        self._title.setGeometry(60, 244, W - 120, 58)
+    def _set_display(self, v: float):
+        self._display = v
+        self.update()
 
-        # Accent line (width starts 0, expands from center)
-        self._line = QFrame(self)
-        self._line.setGeometry(W // 2, 312, 0, 3)
-        self._line.setStyleSheet('background: #e02840; border-radius: 1px;')
+    display = pyqtProperty(float, _get_display, _set_display)
 
-        # Subtitle
-        self._sub = QLabel('W O R L D   C H A M P I O N S H I P   S E A S O N   2 0 2 6', self)
-        self._sub.setFont(QFont('Segoe UI', 8))
-        self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._sub.setStyleSheet('color: #666;')
-        self._sub.setGeometry(60, 326, W - 120, 24)
+    # ── public API ─────────────────────────────────────────────────────────────
 
+    def set_progress(self, frac: float, label: str = ''):
+        # Called from the (blocking) synchronous page build, so paint the new
+        # value immediately with repaint() rather than waiting on the event
+        # loop — and never run processEvents here (that would re-enter the
+        # half-built video/map widgets and crash).
+        self._display = max(0.0, min(1.0, float(frac)))
+        if label:
+            self._label = label
+        self.repaint()
 
+    def complete(self):
+        """Fill to 100%, hold briefly, then fade out and emit `finished`."""
+        if self._done:
+            return
+        self._done = True
+        self._label = 'Ready'
+        self._bar_anim.stop()
+        self._bar_anim.setStartValue(self._display)
+        self._bar_anim.setEndValue(1.0)
+        self._bar_anim.setDuration(320)
+        self._bar_anim.finished.connect(lambda: QTimer.singleShot(360, self._fade_out))
+        self._bar_anim.start()
 
-        # Opacity effects (all start invisible)
-        self._eff = {}
-        for key, widget in [('icon', self._icon), ('title', self._title),
-                             ('sub',  self._sub)]:
-            eff = QGraphicsOpacityEffect()
-            eff.setOpacity(0.0)
-            widget.setGraphicsEffect(eff)
-            self._eff[key] = eff
-
-        self.setWindowOpacity(1.0)
-
-    # ── Custom background paint (needed for transparency + rounded corners) ──
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setBrush(QBrush(QColor(8, 8, 14)))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(self.rect(), 14, 14)
-
-    # ── Animation ─────────────────────────────────────────────────────────────
-
-    def start(self):
-        e = self._eff
-        seq = QSequentialAnimationGroup(self)
-
-        # 1. Icon: fade + slide up
-        p1 = QParallelAnimationGroup()
-        p1.addAnimation(_opacity_anim(e['icon'], 620, 0, 1))
-        p1.addAnimation(_geom_anim(self._icon, 620,
-                                   QRect(W//2-64, 150, 128, 96),
-                                   QRect(W//2-64, 130, 128, 96)))
-        seq.addAnimation(p1)
-
-        # 2. Title: fade + slide up
-        p2 = QParallelAnimationGroup()
-        p2.addAnimation(_opacity_anim(e['title'], 560, 0, 1))
-        p2.addAnimation(_geom_anim(self._title, 560,
-                                   QRect(60, 268, W-120, 58),
-                                   QRect(60, 244, W-120, 58)))
-        seq.addAnimation(p2)
-
-        # 3. Accent line expands from center
-        line_w = 340
-        a_line = QPropertyAnimation(self._line, b'geometry')
-        a_line.setDuration(380)
-        a_line.setStartValue(QRect(W//2, 312, 0, 3))
-        a_line.setEndValue(QRect(W//2 - line_w//2, 312, line_w, 3))
-        a_line.setEasingCurve(QEasingCurve.Type.OutCubic)
-        seq.addAnimation(a_line)
-
-        # 4. Subtitle
-        seq.addAnimation(_opacity_anim(e['sub'], 380, 0, 1))
-
-        # 5. Tagline + version
-
-        # 6. Hold
-        seq.addPause(1800)
-
-        # 7. Fade out entire window
-        a_out = QPropertyAnimation(self, b'windowOpacity')
-        a_out.setDuration(380)
-        a_out.setStartValue(1.0)
-        a_out.setEndValue(0.0)
-        a_out.setEasingCurve(QEasingCurve.Type.InCubic)
-        seq.addAnimation(a_out)
-
-        seq.finished.connect(self._on_done)
-        self._seq = seq
-        seq.start()
+    def _fade_out(self):
+        a = QPropertyAnimation(self, b'windowOpacity', self)
+        a.setDuration(420)
+        a.setStartValue(1.0)
+        a.setEndValue(0.0)
+        a.setEasingCurve(QEasingCurve.Type.InCubic)
+        a.finished.connect(self._on_done)
+        self._fade = a
+        a.start()
 
     def _on_done(self):
         self.hide()
         self.finished.emit()
+
+    # ── paint ──────────────────────────────────────────────────────────────────
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W, H = self.width(), self.height()
+
+        # wallpaper, cover-scaled
+        if not self._wall.isNull():
+            iw, ih = self._wall.width(), self._wall.height()
+            scale = max(W / iw, H / ih)
+            w, h = iw * scale, ih * scale
+            p.drawPixmap(QRectF((W - w) / 2, (H - h) / 2, w, h), self._wall,
+                         QRectF(0, 0, iw, ih))
+        else:
+            p.fillRect(self.rect(), QColor(8, 8, 14))
+
+        # darkening overlay — heavier toward the bottom where the bar sits
+        grad = QLinearGradient(0, 0, 0, H)
+        grad.setColorAt(0.0, QColor(6, 6, 12, 150))
+        grad.setColorAt(0.55, QColor(6, 6, 12, 120))
+        grad.setColorAt(1.0, QColor(4, 4, 10, 230))
+        p.fillRect(self.rect(), QBrush(grad))
+
+        # title
+        cx = W / 2
+        p.setPen(QColor(240, 240, 248))
+        p.setFont(QFont('Segoe UI', 40, QFont.Weight.Bold))
+        title_rect = QRectF(0, H * 0.5 - 90, W, 60)
+        p.drawText(title_rect, Qt.AlignmentFlag.AlignCenter, 'MotoRacing Simulator')
+
+        p.setPen(QColor(200, 60, 80))
+        f = QFont('Segoe UI', 12, QFont.Weight.Bold)
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 4)
+        p.setFont(f)
+        p.drawText(QRectF(0, H * 0.5 - 24, W, 24),
+                   Qt.AlignmentFlag.AlignCenter, 'WORLD CHAMPIONSHIP')
+
+        # progress bar
+        bar_w = min(560, W * 0.42)
+        bar_h = 6
+        bx, by = cx - bar_w / 2, H * 0.78
+        track = QRectF(bx, by, bar_w, bar_h)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(255, 255, 255, 30))
+        p.drawRoundedRect(track, 3, 3)
+        fill_w = max(0.0, bar_w * self._display)
+        if fill_w > 0:
+            p.setBrush(QColor(224, 40, 64))
+            p.drawRoundedRect(QRectF(bx, by, fill_w, bar_h), 3, 3)
+
+        # label + percentage
+        pct = int(round(self._display * 100))
+        p.setPen(QColor(180, 180, 195))
+        lf = QFont('Segoe UI', 9)
+        lf.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
+        p.setFont(lf)
+        p.drawText(QRectF(bx, by + 14, bar_w, 20),
+                   Qt.AlignmentFlag.AlignLeft, self._label.upper())
+        p.drawText(QRectF(bx, by + 14, bar_w, 20),
+                   Qt.AlignmentFlag.AlignRight, f'{pct}%')

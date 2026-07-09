@@ -1,10 +1,26 @@
+from pathlib import Path
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
-                              QLabel, QFrame, QSizePolicy, QApplication,
+                              QLabel, QFrame, QWidget, QApplication,
                               QPushButton, QDialog)
-from PyQt6.QtGui import QFont, QPainter, QColor
+from PyQt6.QtGui import QFont, QPainter, QColor, QPixmap
 from PyQt6.QtCore import Qt, pyqtSignal
 
 from app.widgets.video_bg import VideoBackground
+
+_MENU_DIR = Path(__file__).parent.parent.parent / 'images' / 'menu'
+
+# bottom status bar (option subtitle) — near-solid black, sized to ~2x the text
+_BAND_CSS   = 'rgba(6, 6, 10, 235)'
+_SBAR_PT    = 10       # subtitle font size
+_SBAR_H     = 34       # bar thickness ≈ 2x the text height
+
+
+def _load_logo(key: str) -> QPixmap | None:
+    for ext in ('png', 'jpg'):
+        p = _MENU_DIR / f'{key}.{ext}'
+        if p.exists():
+            return QPixmap(str(p))
+    return None
 
 
 # ── Exit confirmation dialog ──────────────────────────────────────────────────
@@ -97,91 +113,68 @@ class ExitDialog(QDialog):
         p.drawRoundedRect(self.rect(), 12, 12)
 
 
-PANEL_W = 390
+# ── Mode tile (horizontal menu) ────────────────────────────────────────────────
 
+class ModeTile(QFrame):
+    """One entry in the horizontal home menu: a logo above a label. The logo
+    image (images/menu/<key>.png) is optional — until one is dropped in, a
+    'LOGO' placeholder box is shown."""
 
-# ── Mode bar ──────────────────────────────────────────────────────────────────
-
-class ModeBar(QFrame):
     clicked = pyqtSignal()
 
     _SS = """
-        ModeBar {{
-            background-color: {bg};
-            border: 1px solid {border};
-            border-radius: 6px;
-        }}
-        ModeBar QLabel {{ background: transparent; border: none; color: {txt}; }}
-        ModeBar QFrame {{ background: transparent; border: none; }}
+        ModeTile {{ background: {bg}; border: 1px solid {border}; border-radius: 10px; }}
+        ModeTile QLabel {{ background: transparent; border: none; color: {txt}; }}
     """
 
-    def __init__(self, title, subtitle, danger=False):
+    def __init__(self, key, title, danger=False):
         super().__init__()
-        self._selected = False
-        self._danger   = danger
-        self._focused  = False
-        self._apply(False, False)
+        self._danger  = danger
+        self._focused = False
+        self.setFixedSize(162, 140)
 
         col = QVBoxLayout(self)
-        col.setContentsMargins(18, 14, 18, 14)
-        col.setSpacing(4)
+        col.setContentsMargins(12, 16, 12, 12)
+        col.setSpacing(10)
 
-        row = QHBoxLayout()
-        row.setSpacing(0)
+        self._logo = QLabel()
+        self._logo.setFixedHeight(60)
+        self._logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pix = _load_logo(key)
+        self._has_logo = pix is not None
+        if self._has_logo:
+            self._logo.setPixmap(pix.scaled(
+                58, 58, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+        col.addWidget(self._logo)
 
-        self._accent = QFrame()
-        self._accent.setFixedWidth(3)
-        self._accent.setMinimumHeight(24)
-        self._accent.setStyleSheet('background: #2a2a2a; border-radius: 2px;')
-        row.addWidget(self._accent)
-        row.addSpacing(14)
+        self._lbl = QLabel(title)
+        self._lbl.setWordWrap(True)
+        self._lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        self._lbl.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
+        col.addWidget(self._lbl, 1)
 
-        self._ttl = QLabel(title)
-        self._ttl.setFont(QFont('Segoe UI', 13, QFont.Weight.Bold))
-        row.addWidget(self._ttl, 1)
+        self._apply()
 
-        col.addLayout(row)
-
-        self._sub = QLabel(subtitle)
-        self._sub.setFont(QFont('Segoe UI', 10))
-        self._sub.setStyleSheet('color: #888; padding-left: 17px; background: transparent; border: none;')
-        self._sub.setVisible(False)
-        col.addWidget(self._sub)
-
-    def _apply(self, selected, hover):
-        if selected:
-            bg, border, txt = 'rgba(224,40,64,35)', '#e02840', '#ffffff'
-        elif hover:
-            if self._danger:
-                bg, border, txt = 'rgba(224,40,64,20)', '#993020', '#ff7766'
-            else:
-                bg, border, txt = 'rgba(255,255,255,10)', '#555', '#eeeeee'
+    def _apply(self):
+        if self._focused:
+            bg, border, txt = 'rgba(224,40,64,45)', '#e02840', '#ffffff'
+        elif self._danger:
+            bg, border, txt = 'rgba(255,255,255,5)', '#33232a', '#cc9099'
         else:
-            bg, border, txt = 'rgba(255,255,255,4)', '#222', '#aaaaaa'
+            bg, border, txt = 'rgba(255,255,255,5)', '#2a2a3a', '#cfcfe0'
         self.setStyleSheet(self._SS.format(bg=bg, border=border, txt=txt))
-
-    def set_selected(self, v):
-        self._selected = v
-        self._apply(v, False)
-        self._sub.setVisible(v)
-        self._accent.setStyleSheet(
-            'background: #e02840; border-radius: 2px;' if v
-            else 'background: #2a2a2a; border-radius: 2px;'
-        )
+        if not self._has_logo:
+            c = '#e02840' if self._focused else '#3a3a4a'
+            self._logo.setText('LOGO')
+            self._logo.setFont(QFont('Segoe UI', 7, QFont.Weight.Bold))
+            self._logo.setStyleSheet(
+                f'color: {c}; border: 1px dashed {c}; border-radius: 8px;'
+                ' letter-spacing: 2px; background: transparent;')
 
     def set_focused(self, v: bool):
         self._focused = v
-        if not self._selected:
-            if v:
-                self.setStyleSheet(self._SS.format(
-                    bg='rgba(255,255,255,8)', border='#555566', txt='#ddddee'))
-            else:
-                self._apply(False, False)
-            self._accent.setStyleSheet(
-                'background: #e02840; border-radius: 2px;' if v
-                else 'background: #2a2a2a; border-radius: 2px;'
-            )
-        self._sub.setVisible(v or self._selected)
+        self._apply()
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -190,6 +183,16 @@ class ModeBar(QFrame):
 
 
 # ── Page ─────────────────────────────────────────────────────────────────────
+
+_MODES = [
+    ('random',       'RANDOM RACE',          'Pick any circuit for a single weekend'),
+    ('championship', 'CHAMPIONSHIP',         'Arrange a calendar and run a full season'),
+    ('history',      'CHAMPIONSHIP HISTORY', 'Past champions and all-time rider records'),
+    ('gallery',      'GALLERY',              'Browse rider and team profiles'),
+    ('soundtrack',   'SOUNDTRACK',           'Browse and play music tracks'),
+    ('exit',         'EXIT',                 'Close the application'),
+]
+
 
 class HomePage(QWizardPage):
     def __init__(self, wiz):
@@ -200,73 +203,58 @@ class HomePage(QWizardPage):
         self._vbg = VideoBackground.instance()
         self._vbg.frame_ready.connect(self._on_bg_frame)
 
-        # ── Right navigation panel ────────────────────────────────────────────
-        main = QHBoxLayout(self)
-        main.setContentsMargins(0, 0, 0, 0)
-        main.setSpacing(0)
-        main.addStretch(1)
-
-        panel = QFrame()
-        panel.setFixedWidth(PANEL_W)
-        panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-        panel.setStyleSheet('background-color: rgba(0,0,0,215); border: none;')
-
-        pl = QVBoxLayout(panel)
-        pl.setContentsMargins(28, 32, 28, 28)
-        pl.setSpacing(0)
-
-        ttl = QLabel('MotoRacing\nSimulator')
-        ttl.setFont(QFont('Segoe UI', 22, QFont.Weight.Bold))
-        ttl.setStyleSheet('color: #ffffff; background: transparent; border: none;')
-        pl.addWidget(ttl)
-        pl.addSpacing(8)
-
-        tag = QLabel('2026  ·  WORLD CHAMPIONSHIP')
-        tag.setFont(QFont('Segoe UI', 11))
-        tag.setStyleSheet('color: #666; letter-spacing: 1px; background: transparent; border: none;')
-        pl.addWidget(tag)
-        pl.addSpacing(18)
-
-        div = QFrame()
-        div.setFixedHeight(2)
-        div.setStyleSheet('background: #e02840; border: none;')
-        pl.addWidget(div)
-        pl.addSpacing(28)
-
-        pl.addStretch(1)
-
-        self._bar_r = ModeBar('RANDOM RACE',  'Pick any circuit for a single weekend')
-        self._bar_c = ModeBar('CHAMPIONSHIP', 'Arrange a calendar and run a full season')
-        self._bar_h = ModeBar('CHAMPIONSHIP HISTORY', 'Past champions and all-time rider records')
-        self._bar_g = ModeBar('GALLERY',      'Browse rider and team profiles')
-        self._bar_s = ModeBar('SOUNDTRACK',   'Browse and play music tracks')
-        self._bar_x = ModeBar('EXIT',         'Close the application', danger=True)
-        self._bars  = [self._bar_r, self._bar_c, self._bar_h, self._bar_g, self._bar_s, self._bar_x]
-        self._modes = ['random', 'championship', 'history', 'gallery', 'soundtrack', 'exit']
+        self._modes = [m[0] for m in _MODES]
+        self._subs  = {m[0]: m[2] for m in _MODES}
         self._focus_idx = 0
 
-        self._bar_r.clicked.connect(lambda: self._select('random'))
-        self._bar_c.clicked.connect(lambda: self._select('championship'))
-        self._bar_h.clicked.connect(lambda: self._select('history'))
-        self._bar_g.clicked.connect(lambda: self._select('gallery'))
-        self._bar_s.clicked.connect(lambda: self._select('soundtrack'))
-        self._bar_x.clicked.connect(self._confirm_exit)
+        # ── Title top, tiles + subtitle band along the bottom ────────────────
+        # The home video plays at its original colour (no darkening overlay);
+        # the focused option's subtitle sits in a solid black band instead, so
+        # it stays readable without dimming the footage.
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        pl.addWidget(self._bar_r)
-        pl.addSpacing(10)
-        pl.addWidget(self._bar_c)
-        pl.addSpacing(10)
-        pl.addWidget(self._bar_h)
-        pl.addSpacing(10)
-        pl.addWidget(self._bar_g)
-        pl.addSpacing(10)
-        pl.addWidget(self._bar_s)
-        pl.addSpacing(10)
-        pl.addWidget(self._bar_x)
+        ttl = QLabel('MotoRacing Simulator')
+        ttl.setFont(QFont('Segoe UI', 30, QFont.Weight.Bold))
+        ttl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ttl.setStyleSheet('color: #ffffff; background: transparent; border: none;')
+        root.addWidget(ttl)
+        root.addSpacing(6)
 
-        pl.addStretch(1)
+        tag = QLabel('2026  ·  WORLD CHAMPIONSHIP')
+        tag.setFont(QFont('Segoe UI', 12))
+        tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tag.setStyleSheet('color: #ffffff; letter-spacing: 3px; background: transparent; border: none;')
+        root.addWidget(tag)
 
-        main.addWidget(panel)
+        root.addStretch(1)
+
+        row = QHBoxLayout()
+        row.setSpacing(14)
+        row.addStretch(1)
+        self._tiles = []
+        for i, (key, title, _sub) in enumerate(_MODES):
+            tile = ModeTile(key, title, danger=(key == 'exit'))
+            tile.clicked.connect(lambda _=False, idx=i: self._activate(idx))
+            row.addWidget(tile)
+            self._tiles.append(tile)
+        row.addStretch(1)
+        root.addLayout(row)
+        # bottom margin keeps the tile row just above the status-bar overlay
+        # (the bar sits at the true window bottom; the page ends ~gap px above it)
+        root.setContentsMargins(40, 34, 40, 18)
+
+        # Bottom status bar — a slim black strip parented to the wizard so it
+        # spans the full width and sits flush at the true window bottom (over
+        # the strip QWizard reserves). Text is centred inside it.
+        self._desc = QLabel(self._wiz)
+        self._desc.setFont(QFont('Segoe UI', _SBAR_PT))
+        self._desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._desc.setStyleSheet(
+            f'background: {_BAND_CSS}; color: #ffffff; border: none;')
+        self._desc.hide()
+        self._wiz.currentIdChanged.connect(self._sync_statusbar)
 
     # ── Background ────────────────────────────────────────────────────────────
 
@@ -277,19 +265,34 @@ class HomePage(QWizardPage):
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0))
-        # Scale against the wizard's full size (not this page's own, slightly
-        # smaller rect) so the video lines up with the strip QWizard reserves
-        # below the page for its hidden button row — see VideoBackground.paint.
+        # Original video colour — no darkening overlay on the home page.
         offset = self.mapTo(self._wiz, self.rect().topLeft())
         self._vbg.paint(p, self, full_size=self._wiz.size(), offset=offset)
 
-    def paint_gap_overlay(self, painter, rect):
-        """Continue the right nav panel's dark tint into the reserved strip
-        below it (see _GapFiller in wizard.py) — otherwise the video would
-        jump from muted (under the panel) to full brightness right at the seam.
-        """
-        x = rect.width() - PANEL_W
-        painter.fillRect(x, 0, PANEL_W, rect.height(), QColor(0, 0, 0, 215))
+    # ── Bottom status bar (wizard-level overlay) ──────────────────────────────
+
+    def place_bottom_overlay(self):
+        """Position + raise the status bar. Also called by the wizard after it
+        raises the gap filler, so the bar always stays above it."""
+        self._desc.setGeometry(0, self._wiz.height() - _SBAR_H,
+                               self._wiz.width(), _SBAR_H)
+        self._desc.raise_()
+
+    def _sync_statusbar(self):
+        if self._wiz.currentPage() is self:
+            self.place_bottom_overlay()
+            self._desc.show()
+        else:
+            self._desc.hide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._desc.isVisible():
+            self.place_bottom_overlay()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_statusbar()
 
     # ── Logic ─────────────────────────────────────────────────────────────────
 
@@ -300,43 +303,32 @@ class HomePage(QWizardPage):
         wiz.all_race_pts  = []
         from app.wizard import START_YEAR
         wiz.season_year   = START_YEAR
-        for bar in self._bars:
-            bar.set_selected(False)
-            bar.set_focused(False)
         self.completeChanged.emit()
-        self._focus_idx = 0
-        self._bars[0].set_focused(True)
+        self._set_focus(0)
+
+    def _set_focus(self, idx: int):
+        self._focus_idx = idx % len(self._tiles)
+        for i, tile in enumerate(self._tiles):
+            tile.set_focused(i == self._focus_idx)
+        self._desc.setText(self._subs[self._modes[self._focus_idx]])
 
     def handle_key(self, key: int) -> bool:
-        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-            self._bars[self._focus_idx].set_focused(False)
-            self._focus_idx = (self._focus_idx + (-1 if key == Qt.Key.Key_Up else 1)) % len(self._bars)
-            self._bars[self._focus_idx].set_focused(True)
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            self._set_focus(self._focus_idx + (-1 if key == Qt.Key.Key_Left else 1))
             return True
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
-            mode = self._modes[self._focus_idx]
-            if mode == 'exit':
-                self._confirm_exit()
-            else:
-                self._wiz.mode = mode
-                self._wiz.next()
+            self._activate(self._focus_idx)
             return True
         return False
 
-    def _select(self, mode):
-        self._wiz.mode = mode
-        self._bar_r.set_selected(mode == 'random')
-        self._bar_c.set_selected(mode == 'championship')
-        self._bar_h.set_selected(mode == 'history')
-        self._bar_g.set_selected(mode == 'gallery')
-        self._bar_s.set_selected(mode == 'soundtrack')
-        self._bar_x.set_selected(False)
-        self.completeChanged.emit()
-        # sync keyboard focus to the clicked/selected bar
-        for b in self._bars:
-            b.set_focused(False)
-        self._focus_idx = self._modes.index(mode)
-        self._bars[self._focus_idx].set_focused(True)
+    def _activate(self, idx: int):
+        self._set_focus(idx)
+        mode = self._modes[idx]
+        if mode == 'exit':
+            self._confirm_exit()
+        else:
+            self._wiz.mode = mode
+            self._wiz.next()
 
     def _confirm_exit(self):
         # The single "Do you want to exit?" confirmation lives in

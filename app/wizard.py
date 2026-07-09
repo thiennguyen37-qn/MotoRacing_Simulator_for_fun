@@ -86,9 +86,23 @@ class MotoWizard(QWizard):
         if hasattr(self._audio, 'track_changed'):
             self._audio.track_changed.connect(self._toast.show_track)
 
-        # Pages — IDs are assigned in addPage order
+        self._audio_started = False
+        self._built = False
+
+    # ── Page build (drives the loading bar) ────────────────────────────────────
+
+    def build(self, progress=None, done=None):
+        """Build the (heavy) pages synchronously, reporting progress before
+        each one. `progress` should paint immediately (SplashScreen.set_progress
+        uses repaint()); we deliberately never run the event loop mid-build,
+        so the half-constructed video/map widgets are never re-entered."""
+        def report(frac, label=''):
+            if progress:
+                progress(frac, label)
+
+        report(0.12, 'Loading modules')
         from app.pages.p_home          import HomePage
-        from app.pages.p_calendar      import CalendarPage
+        from app.pages.p_calendar      import CalendarPage      # pulls in the map stack
         from app.pages.p0_circuit      import CircuitPage
         from app.pages.p1_practice     import PracticePage
         from app.pages.p2_qualifying   import QualifyingPage
@@ -98,23 +112,31 @@ class MotoWizard(QWizard):
         from app.pages.p_gallery       import GalleryPage
         from app.pages.p_soundtrack    import SoundtrackPage
 
-        self.ID_HOME       = self.addPage(HomePage(self))
-        self.ID_CALENDAR   = self.addPage(CalendarPage(self))
-        self.ID_CIRCUIT    = self.addPage(CircuitPage(self))
-        self.ID_PRACTICE   = self.addPage(PracticePage(self))
-        self.ID_QUALI      = self.addPage(QualifyingPage(self))
-        self.ID_RACE       = self.addPage(RacePage(self))
-        self.ID_STANDINGS  = self.addPage(ChampionshipPage(self))
-        self.ID_HISTORY    = self.addPage(HistoryPage(self))
-        self.ID_GALLERY    = self.addPage(GalleryPage(self))
-        self.ID_SOUNDTRACK = self.addPage(SoundtrackPage(self, self._audio))
+        builders = [
+            ('ID_HOME',       'Home',         lambda: HomePage(self)),
+            ('ID_CALENDAR',   'Season setup', lambda: CalendarPage(self)),
+            ('ID_CIRCUIT',    'Circuits',     lambda: CircuitPage(self)),
+            ('ID_PRACTICE',   'Practice',     lambda: PracticePage(self)),
+            ('ID_QUALI',      'Qualifying',   lambda: QualifyingPage(self)),
+            ('ID_RACE',       'Race',         lambda: RacePage(self)),
+            ('ID_STANDINGS',  'Standings',    lambda: ChampionshipPage(self)),
+            ('ID_HISTORY',    'History',      lambda: HistoryPage(self)),
+            ('ID_GALLERY',    'Gallery',      lambda: GalleryPage(self)),
+            ('ID_SOUNDTRACK', 'Soundtrack',   lambda: SoundtrackPage(self, self._audio)),
+        ]
+        for i, (attr, label, make) in enumerate(builders):
+            report(0.18 + 0.75 * i / len(builders), label)
+            setattr(self, attr, self.addPage(make()))
 
+        report(0.96, 'Finishing up')
+        self._finalize()
+        if done:
+            done()
+
+    def _finalize(self):
         # NOTE: IndependentPages is deliberately NOT set — the championship
         # loops Practice -> ... -> Standings -> Practice, and with that option
         # revisited pages would never run initializePage again (stale data).
-        # Default cleanupPage is a no-op here (no registered fields), so going
-        # back is still lossless.
-
         self.setButtonText(QWizard.WizardButton.NextButton,   'Continue →')
         self.setButtonText(QWizard.WizardButton.FinishButton, 'Finish')
         self.setButtonText(QWizard.WizardButton.BackButton,   '← Back')
@@ -125,8 +147,7 @@ class MotoWizard(QWizard):
         # QWizard reserves a strip at the bottom for its button row — even with
         # setButtonLayout([]) the row stays 0-height but the space (and its
         # lighter default background) remains, showing as a stray gray bar.
-        # This app never shows wizard buttons (fully keyboard-driven), so this
-        # continues the current page's own background into that strip instead.
+        # This continues the current page's own background into that strip.
         self._gap_filler = _GapFiller(self)
         VideoBackground.instance().frame_ready.connect(self._gap_filler.update)
 
@@ -135,8 +156,7 @@ class MotoWizard(QWizard):
 
         self.setCursor(Qt.CursorShape.BlankCursor)
         QApplication.instance().installEventFilter(self)
-
-        self._audio_started = False
+        self._built = True
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -149,6 +169,9 @@ class MotoWizard(QWizard):
         QTimer.singleShot(0, self._sync_gap_filler)
 
     def _sync_gap_filler(self):
+        # a resize can be scheduled before build() creates the filler
+        if not getattr(self, '_built', False):
+            return
         page = self.currentPage()
         if page is None:
             self._gap_filler.hide()
@@ -164,7 +187,12 @@ class MotoWizard(QWizard):
         self._gap_filler.setGeometry(0, y, self.width(), h)
         self._gap_filler.show()
         self._gap_filler.raise_()
-        self._toast.raise_()   # keep the now-playing toast above the gap filler
+        # a page may own a bottom overlay (e.g. the home status bar) that must
+        # sit above the gap filler
+        place = getattr(page, 'place_bottom_overlay', None)
+        if place is not None:
+            place()
+        self._toast.raise_()   # keep the now-playing toast above everything
 
     def reject(self):
         pass  # prevent Escape from closing the wizard

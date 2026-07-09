@@ -67,6 +67,7 @@ def main():
         splash.hide()
         wizard.raise_()
         wizard.activateWindow()
+        wizard.start_audio()   # music begins only now — home page is visible
 
     splash.finished.connect(on_finished)
     QTimer.singleShot(60, lambda: wizard.build(progress=splash.set_progress,

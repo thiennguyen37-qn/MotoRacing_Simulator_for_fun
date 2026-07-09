@@ -158,8 +158,10 @@ class MotoWizard(QWizard):
         QApplication.instance().installEventFilter(self)
         self._built = True
 
-    def showEvent(self, event):
-        super().showEvent(event)
+    def start_audio(self):
+        """Begin playback — called once the splash has faded and the home page
+        is actually on screen (not while the window is still hidden behind the
+        splash), so the music doesn't start ~1s early."""
         if not self._audio_started:
             self._audio_started = True
             self._audio.start()

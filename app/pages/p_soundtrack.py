@@ -214,3 +214,8 @@ class SoundtrackPage(QWizardPage):
         offset = self.mapTo(self._wiz, self.rect().topLeft())
         self._vbg.paint(p, self, full_size=self._wiz.size(), offset=offset)
         p.fillRect(self.rect(), QColor(0, 0, 8, 175))
+
+    def paint_gap_overlay(self, painter, rect):
+        """Match the page's darkening on the strip QWizard reserves below it
+        (drawn by _GapFiller), so the bottom edge isn't left brighter."""
+        painter.fillRect(rect, QColor(0, 0, 8, 175))

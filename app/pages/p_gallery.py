@@ -841,5 +841,11 @@ class GalleryPage(QWizardPage):
         offset = self.mapTo(self._wiz, self.rect().topLeft())
         self._vbg.paint(p, self, full_size=self._wiz.size(), offset=offset)
 
+    def paint_gap_overlay(self, painter, rect):
+        """The Riders/Teams views darken the video with this tint; apply the
+        same to the strip QWizard reserves below the page (drawn by _GapFiller)
+        so the bottom edge isn't left brighter than the rest."""
+        painter.fillRect(rect, QColor(5, 5, 14, 218))
+
     def nextId(self):
         return -1

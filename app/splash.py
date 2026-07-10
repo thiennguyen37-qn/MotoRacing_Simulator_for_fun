@@ -118,13 +118,10 @@ class SplashScreen(QWidget):
             p.setBrush(QColor(224, 40, 64))
             p.drawRoundedRect(QRectF(bx, by, fill_w, bar_h), 3, 3)
 
-        # label + percentage
-        pct = int(round(self._display * 100))
-        p.setPen(QColor(180, 180, 195))
+        # label only — the percentage is intentionally hidden
+        p.setPen(QColor(255, 255, 255))
         lf = QFont('Segoe UI', 9)
         lf.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
         p.setFont(lf)
         p.drawText(QRectF(bx, by + 14, bar_w, 20),
                    Qt.AlignmentFlag.AlignLeft, self._label.upper())
-        p.drawText(QRectF(bx, by + 14, bar_w, 20),
-                   Qt.AlignmentFlag.AlignRight, f'{pct}%')

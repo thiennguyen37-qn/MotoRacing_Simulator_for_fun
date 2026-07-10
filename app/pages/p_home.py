@@ -1,9 +1,10 @@
 from pathlib import Path
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
                               QLabel, QFrame, QWidget, QApplication,
-                              QPushButton, QDialog)
+                              QPushButton, QDialog, QGraphicsOpacityEffect)
 from PyQt6.QtGui import QFont, QPainter, QColor, QPixmap
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import (Qt, pyqtSignal, pyqtProperty, QPropertyAnimation,
+                          QEasingCurve)
 
 from app.widgets.video_bg import VideoBackground
 
@@ -125,12 +126,28 @@ class ExitDialog(QDialog):
         p.drawRoundedRect(self.rect(), 12, 12)
 
 
-# ── Mode tile (horizontal menu) ────────────────────────────────────────────────
+# ── Carousel arrow ─────────────────────────────────────────────────────────────
+
+def _make_arrow(ch: str) -> QLabel:
+    """A slim chevron flanking the carousel. Purely decorative — navigation is
+    by keyboard. Kept visible only when there is a neighbour in that direction;
+    at the list ends it is made transparent but still occupies its slot so the
+    current tile stays pinned to the screen centre."""
+    a = QLabel(ch)
+    a.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    a.setFont(QFont('Segoe UI', 30, QFont.Weight.Bold))
+    a.setFixedWidth(44)
+    a.setStyleSheet('color: rgba(255,255,255,190); background: transparent; border: none;')
+    return a
+
+
+# ── Mode tile (carousel slot) ──────────────────────────────────────────────────
 
 class ModeTile(QFrame):
-    """One entry in the horizontal home menu: a logo above a label. The logo
-    image (images/menu/<key>.png) is optional — until one is dropped in, a
-    'LOGO' placeholder box is shown."""
+    """One carousel slot: a logo above a label. The same three widgets are
+    reused as the previous / current / next slots and reconfigured as the
+    selection moves. The logo image (images/menu/<key>.png) is optional — until
+    one is dropped in, a 'LOGO' placeholder box is shown."""
 
     clicked = pyqtSignal()
 
@@ -139,57 +156,122 @@ class ModeTile(QFrame):
         ModeTile QLabel {{ background: transparent; border: none; color: {txt}; }}
     """
 
-    def __init__(self, key, title, danger=False):
+    # per-variant metrics: centre tile is bigger, side tiles smaller + dimmed
+    _BIG  = dict(size=(200, 196), logo=104, logo_h=112, pt=12)
+    _SIDE = dict(size=(152, 152), logo=74,  logo_h=82,  pt=10)
+
+    def __init__(self):
         super().__init__()
-        self._danger  = danger
-        self._focused = False
-        self.setFixedSize(162, 140)
+        self._danger   = False
+        self._center   = False
+        self._blank    = False
+        self._has_logo = False
 
         col = QVBoxLayout(self)
         col.setContentsMargins(12, 16, 12, 12)
         col.setSpacing(10)
 
         self._logo = QLabel()
-        self._logo.setFixedHeight(60)
         self._logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        col.addWidget(self._logo)
+
+        self._lbl = QLabel()
+        self._lbl.setWordWrap(True)
+        self._lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        col.addWidget(self._lbl, 1)
+
+        self._opacity = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._opacity)
+
+        # Gentle red pulse for the centre (selected) tile.
+        self._pulse = 0.0
+        self._pulse_anim = QPropertyAnimation(self, b'pulse', self)
+        self._pulse_anim.setDuration(1100)
+        self._pulse_anim.setLoopCount(-1)
+        self._pulse_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._pulse_anim.setKeyValueAt(0.0, 0.0)
+        self._pulse_anim.setKeyValueAt(0.5, 1.0)
+        self._pulse_anim.setKeyValueAt(1.0, 0.0)
+
+    # centre-tile background alpha oscillates with this 0..1 value
+    def _get_pulse(self) -> float:
+        return self._pulse
+
+    def _set_pulse(self, v: float):
+        self._pulse = v
+        if self._center and not self._blank:
+            a = int(85 + v * 95)   # ~85..180 — medium red that breathes
+            self.setStyleSheet(self._SS.format(
+                bg=f'rgba(224,40,64,{a})', border='#ff6078', txt='#ffffff'))
+
+    pulse = pyqtProperty(float, _get_pulse, _set_pulse)
+
+    def configure(self, key: str, title: str, danger: bool, center: bool):
+        """Populate this slot with a mode. center=True → big + highlighted;
+        otherwise it is a smaller, dimmed neighbour."""
+        self._blank  = False
+        self._danger = danger
+        self._center = center
+        spec = self._BIG if center else self._SIDE
+        self.setFixedSize(*spec['size'])
+        self._logo.setFixedHeight(spec['logo_h'])
+
         pix = _load_logo(key)
         self._has_logo = pix is not None
         if self._has_logo:
             self._logo.setPixmap(pix.scaled(
-                58, 58, Qt.AspectRatioMode.KeepAspectRatio,
+                spec['logo'], spec['logo'], Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation))
-        col.addWidget(self._logo)
+        else:
+            self._logo.setPixmap(QPixmap())
 
-        self._lbl = QLabel(title)
-        self._lbl.setWordWrap(True)
-        self._lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        self._lbl.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
-        col.addWidget(self._lbl, 1)
-
+        self._lbl.setText(title)
+        self._lbl.setFont(QFont('Segoe UI', spec['pt'], QFont.Weight.Bold))
+        self._opacity.setOpacity(1.0 if center else 0.5)
         self._apply()
+        if center:
+            if self._pulse_anim.state() != QPropertyAnimation.State.Running:
+                self._pulse_anim.start()
+        else:
+            self._pulse_anim.stop()
+
+    def set_blank(self):
+        """Empty side slot that still occupies its footprint so the current
+        tile stays centred when there is no neighbour on this side."""
+        self._blank    = True
+        self._center   = False
+        self._has_logo = False
+        self._pulse_anim.stop()
+        self.setFixedSize(*self._SIDE['size'])
+        self._logo.setFixedHeight(self._SIDE['logo_h'])
+        self._logo.clear()
+        self._logo.setStyleSheet('background: transparent; border: none;')
+        self._lbl.clear()
+        self.setStyleSheet('ModeTile { background: transparent; border: none; }')
+        self._opacity.setOpacity(0.0)
 
     def _apply(self):
-        if self._focused:
-            bg, border, txt = 'rgba(224,40,64,45)', '#e02840', '#ffffff'
+        if self._center:
+            bg, border, txt = 'rgba(224,40,64,130)', '#ff6078', '#ffffff'
         elif self._danger:
             bg, border, txt = 'rgba(255,255,255,5)', '#33232a', '#cc9099'
         else:
             bg, border, txt = 'rgba(255,255,255,5)', '#2a2a3a', '#cfcfe0'
         self.setStyleSheet(self._SS.format(bg=bg, border=border, txt=txt))
-        if not self._has_logo:
-            c = '#e02840' if self._focused else '#3a3a4a'
+        if self._has_logo:
+            self._logo.setText('')
+            self._logo.setStyleSheet('background: transparent; border: none;')
+        else:
+            c = '#e02840' if self._center else '#3a3a4a'
             self._logo.setText('LOGO')
-            self._logo.setFont(QFont('Segoe UI', 7, QFont.Weight.Bold))
+            self._logo.setFont(QFont('Segoe UI', 8 if self._center else 7,
+                                     QFont.Weight.Bold))
             self._logo.setStyleSheet(
                 f'color: {c}; border: 1px dashed {c}; border-radius: 8px;'
                 ' letter-spacing: 2px; background: transparent;')
 
-    def set_focused(self, v: bool):
-        self._focused = v
-        self._apply()
-
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
+        if e.button() == Qt.MouseButton.LeftButton and not self._blank:
             self.clicked.emit()
         super().mousePressEvent(e)
 
@@ -228,15 +310,21 @@ class HomePage(QWizardPage):
 
         root.addStretch(1)
 
+        # Carousel: a big centre tile flanked by the dimmed previous / next
+        # tiles and a chevron on each side. Only three tiles ever show; they are
+        # reconfigured as the selection moves (see _set_focus).
         row = QHBoxLayout()
-        row.setSpacing(14)
+        row.setSpacing(16)
         row.addStretch(1)
-        self._tiles = []
-        for i, (key, title, _sub) in enumerate(_MODES):
-            tile = ModeTile(key, title, danger=(key == 'exit'))
-            tile.clicked.connect(lambda _=False, idx=i: self._activate(idx))
-            row.addWidget(tile)
-            self._tiles.append(tile)
+        self._arrow_l = _make_arrow('❮')
+        self._tile_prev = ModeTile()
+        self._tile_cur  = ModeTile()
+        self._tile_next = ModeTile()
+        self._arrow_r = _make_arrow('❯')
+        self._tile_cur.clicked.connect(lambda: self._activate(self._focus_idx))
+        for w in (self._arrow_l, self._tile_prev, self._tile_cur,
+                  self._tile_next, self._arrow_r):
+            row.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addStretch(1)
         root.addLayout(row)
         # bottom margin keeps the tile row just above the status-bar overlay
@@ -305,14 +393,41 @@ class HomePage(QWizardPage):
         self._set_focus(0)
 
     def _set_focus(self, idx: int):
-        self._focus_idx = idx % len(self._tiles)
-        for i, tile in enumerate(self._tiles):
-            tile.set_focused(i == self._focus_idx)
-        self._desc.setText(self._subs[self._modes[self._focus_idx]].upper())
+        n = len(self._modes)
+        self._focus_idx = max(0, min(idx, n - 1))
+        i = self._focus_idx
+
+        key, title, _ = _MODES[i]
+        self._tile_cur.configure(key, title, danger=(key == 'exit'), center=True)
+
+        if i > 0:
+            key, title, _ = _MODES[i - 1]
+            self._tile_prev.configure(key, title, danger=(key == 'exit'), center=False)
+            self._arrow_l.setStyleSheet(
+                'color: rgba(255,255,255,190); background: transparent; border: none;')
+        else:
+            self._tile_prev.set_blank()
+            self._arrow_l.setStyleSheet('color: transparent; background: transparent; border: none;')
+
+        if i < n - 1:
+            key, title, _ = _MODES[i + 1]
+            self._tile_next.configure(key, title, danger=(key == 'exit'), center=False)
+            self._arrow_r.setStyleSheet(
+                'color: rgba(255,255,255,190); background: transparent; border: none;')
+        else:
+            self._tile_next.set_blank()
+            self._arrow_r.setStyleSheet('color: transparent; background: transparent; border: none;')
+
+        self._desc.setText(self._subs[self._modes[i]].upper())
 
     def handle_key(self, key: int) -> bool:
-        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
-            self._set_focus(self._focus_idx + (-1 if key == Qt.Key.Key_Left else 1))
+        if key == Qt.Key.Key_Left:
+            if self._focus_idx > 0:
+                self._set_focus(self._focus_idx - 1)
+            return True
+        if key == Qt.Key.Key_Right:
+            if self._focus_idx < len(self._modes) - 1:
+                self._set_focus(self._focus_idx + 1)
             return True
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             self._activate(self._focus_idx)

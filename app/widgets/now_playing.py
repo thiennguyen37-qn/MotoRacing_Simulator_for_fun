@@ -96,8 +96,8 @@ class NowPlayingToast(QWidget):
         p = self.parent()
         if p is None:
             return
-        x = p.width()  - self.width()  - _MARGIN
-        y = p.height() - self.height() - _MARGIN
+        x = p.width() - self.width() - _MARGIN
+        y = _MARGIN
         self.move(x, y)
 
     def eventFilter(self, obj, event) -> bool:

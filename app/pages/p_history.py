@@ -14,6 +14,13 @@ from app.wizard import HISTORY_FILE as _HISTORY
 
 _TINT = QColor(5, 5, 14, 218)   # same dark veil the Gallery split views use
 
+
+class _TintPanel(QWidget):
+    """A panel that veils the video background with _TINT (used by the split
+    views and the empty state)."""
+    def paintEvent(self, event):
+        QPainter(self).fillRect(self.rect(), _TINT)
+
 # Career-totals tiles, in the order the user asked for.
 _TOTAL_COLS = [('RACES', 'races'), ('WINS', 'wins'), ('PODIUMS', 'podiums'),
                ('POLES', 'poles'), ('FASTEST LAPS', 'fastest_laps'),
@@ -1092,13 +1099,12 @@ class HistoryPage(QWizardPage):
         self._stack.addWidget(self._seasons_view)            # index 2
 
         # ── Index 3: empty state ──────────────────────────────────────────────
-        empty_w = QWidget()
-        empty_w.setStyleSheet('background: transparent;')
+        empty_w = _TintPanel()
         el = QVBoxLayout(empty_w)
         self._empty_lbl = QLabel('No championship has been completed yet — '
                                  'finish a season and it will be recorded here.')
         self._empty_lbl.setFont(QFont('Segoe UI', 12))
-        self._empty_lbl.setStyleSheet('color: #8a8aa2; background: transparent; border: none;')
+        self._empty_lbl.setStyleSheet('color: #ffffff; background: transparent; border: none;')
         self._empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         el.addStretch(1)
         el.addWidget(self._empty_lbl)
@@ -1174,5 +1180,5 @@ class HistoryPage(QWizardPage):
         self._vbg.paint(p, self, full_size=self._wiz.size(), offset=offset)
 
     def paint_gap_overlay(self, painter, rect):
-        if self._stack.currentIndex() in (1, 2):
+        if self._stack.currentIndex() in (1, 2, 3):
             painter.fillRect(rect, _TINT)

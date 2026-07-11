@@ -28,12 +28,23 @@ def _statusbar_font() -> QFont:
     return f
 
 
+_LOGO_CACHE: dict[str, QPixmap | None] = {}
+
+
 def _load_logo(key: str) -> QPixmap | None:
+    # Cache decoded pixmaps: the carousel reconfigures tiles on every arrow
+    # press, and re-reading/decoding the PNG from disk each time is what made
+    # navigation feel laggy.
+    if key in _LOGO_CACHE:
+        return _LOGO_CACHE[key]
+    pix = None
     for ext in ('png', 'jpg'):
         p = _MENU_DIR / f'{key}.{ext}'
         if p.exists():
-            return QPixmap(str(p))
-    return None
+            pix = QPixmap(str(p))
+            break
+    _LOGO_CACHE[key] = pix
+    return pix
 
 
 # ── Exit confirmation dialog ──────────────────────────────────────────────────
@@ -185,6 +196,7 @@ class ModeTile(QFrame):
 
         # Gentle red pulse for the centre (selected) tile.
         self._pulse = 0.0
+        self._last_alpha = -1
         self._pulse_anim = QPropertyAnimation(self, b'pulse', self)
         self._pulse_anim.setDuration(1100)
         self._pulse_anim.setLoopCount(-1)
@@ -200,9 +212,13 @@ class ModeTile(QFrame):
     def _set_pulse(self, v: float):
         self._pulse = v
         if self._center and not self._blank:
-            a = int(85 + v * 95)   # ~85..180 — medium red that breathes
-            self.setStyleSheet(self._SS.format(
-                bg=f'rgba(224,40,64,{a})', border='#ff6078', txt='#ffffff'))
+            # Quantise the alpha so we only re-apply the (expensive) stylesheet a
+            # handful of times per cycle instead of on every animation frame.
+            a = int(85 + v * 95) // 6 * 6   # ~85..180 — medium red that breathes
+            if a != self._last_alpha:
+                self._last_alpha = a
+                self.setStyleSheet(self._SS.format(
+                    bg=f'rgba(224,40,64,{a})', border='#ff6078', txt='#ffffff'))
 
     pulse = pyqtProperty(float, _get_pulse, _set_pulse)
 

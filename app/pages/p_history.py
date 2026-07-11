@@ -722,8 +722,16 @@ def _build_matrix(data: dict, kind: str):
     return t
 
 
-def _rbr_line(label: str, value: str, color: str = '#ffffff') -> str:
-    val = str(value).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+def _esc(s: str) -> str:
+    return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+# Two tabs of separation between podium names (HTML collapses real whitespace).
+_PODIUM_SEP = '&nbsp;' * 8
+
+
+def _rbr_line(label: str, value: str, color: str = '#ffffff', raw: bool = False) -> str:
+    val = value if raw else _esc(value)
     return (f"<tr><td style='color:#8a8aa2; padding:3px 26px 3px 0; font-size:8pt;"
             f" letter-spacing:1px'>{label}</td>"
             f"<td style='color:{color}; font-weight:bold; font-size:10pt'>{val}</td></tr>")
@@ -760,13 +768,12 @@ def _build_race_by_race(data: dict):
         title.setStyleSheet('color:#ffffff; letter-spacing:1px; background:transparent; border:none;')
         cl.addWidget(title)
 
-        podium_txt = '     '.join(f"{i + 1}. {r['name'].upper()}"
-                                  for i, r in enumerate(podium)) if podium else '—'
+        podium_txt = _PODIUM_SEP.join(_esc(r['name'].upper()) for r in podium) if podium else '—'
         rows = ''.join([
             _rbr_line('POLESITTER',           pole['name'].upper() if pole else '—'),
             _rbr_line('FASTEST LAP',          fast['name'].upper() if fast else '—'),
-            _rbr_line('WINNING RIDER',        winner['name'].upper() if winner else '—', '#e8b53a'),
-            _rbr_line('PODIUM',               podium_txt),
+            _rbr_line('WINNING RIDER',        winner['name'].upper() if winner else '—'),
+            _rbr_line('PODIUM',               podium_txt, raw=True),
             _rbr_line('WINNING TEAM',         winner['team'].upper() if winner else '—'),
             _rbr_line('WINNING MANUFACTURER', winner['manufacturer'].upper() if winner else '—'),
         ])
@@ -856,7 +863,7 @@ def _build_gp_detail(season: dict, round_idx: int):
 
     head = QWidget(); head.setStyleSheet('background: transparent;')
     hl = QHBoxLayout(head); hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(16)
-    fpix = _flag_pixmap(country, 46)
+    fpix = _flag_pixmap(country, 46, 69)     # uniform 69×46 for every Grand Prix
     if fpix is not None:
         fl = QLabel(); fl.setPixmap(fpix)
         fl.setStyleSheet('background: transparent; border: none;')
@@ -874,13 +881,12 @@ def _build_gp_detail(season: dict, round_idx: int):
         finishers = sorted((r for r in race if not r['dnf']), key=lambda r: r['pos'])
         winner    = finishers[0] if finishers else None
         podium    = finishers[:3]
-        podium_txt = '     '.join(f"{i + 1}. {r['name'].upper()}"
-                                  for i, r in enumerate(podium)) if podium else '—'
+        podium_txt = _PODIUM_SEP.join(_esc(r['name'].upper()) for r in podium) if podium else '—'
         rows = ''.join([
             _rbr_line('POLESITTER',           pole['name'].upper() if pole else '—'),
             _rbr_line('FASTEST LAP',          fast['name'].upper() if fast else '—'),
-            _rbr_line('WINNING RIDER',        winner['name'].upper() if winner else '—', '#e8b53a'),
-            _rbr_line('PODIUM',               podium_txt),
+            _rbr_line('WINNING RIDER',        winner['name'].upper() if winner else '—'),
+            _rbr_line('PODIUM',               podium_txt, raw=True),
             _rbr_line('WINNING TEAM',         winner['team'].upper() if winner else '—'),
             _rbr_line('WINNING MANUFACTURER', winner['manufacturer'].upper() if winner else '—'),
         ])

@@ -1,16 +1,57 @@
 import json
-from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QLabel,
-                              QFrame, QWidget, QStackedWidget, QSizePolicy,
+from pathlib import Path
+from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout,
+                              QLabel, QFrame, QWidget, QStackedWidget, QSizePolicy,
                               QTableWidgetItem, QHeaderView)
-from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush
+from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush, QPixmap, QIcon
 from PyQt6.QtCore import (Qt, pyqtSignal, pyqtProperty, QPropertyAnimation,
-                          QEasingCurve)
+                          QEasingCurve, QTimer, QSize)
 
 from app.widgets.video_bg import VideoBackground
 from app.widgets.table_utils import (TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR,
                                       make_table, row_bg, GRID_ROLE)
 from app.pages.p_gallery import (_Card, _make_scroll_area, _divider, _section_label)
+from app.pages.p_calendar import _ISO2
 from app.wizard import HISTORY_FILE as _HISTORY
+
+_FLAGS = Path(__file__).parent.parent.parent / 'data' / 'flags'
+_FLAG_CACHE: dict = {}
+
+
+def _flag_pixmap(country: str, height: int = 72, width: int | None = None):
+    """Flag pixmap. With `width` given, scales to an exact width×height (uniform
+    size for every flag); otherwise scales to `height`, keeping aspect ratio."""
+    key = (country, height, width)
+    if key in _FLAG_CACHE:
+        return _FLAG_CACHE[key]
+    iso = _ISO2.get(country, '')
+    pix = None
+    if iso:
+        p = _FLAGS / f'{iso}.png'
+        if p.exists():
+            raw = QPixmap(str(p))
+            if not raw.isNull():
+                if width is not None:
+                    pix = raw.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                     Qt.TransformationMode.SmoothTransformation)
+                else:
+                    pix = raw.scaledToHeight(height, Qt.TransformationMode.SmoothTransformation)
+    _FLAG_CACHE[key] = pix
+    return pix
+
+
+def _row_sizes(n: int, max_per_row: int = 5) -> list:
+    """Split n boxes into balanced rows (heavier rows in the middle), e.g. 13 → [4, 5, 4]."""
+    if n <= 0:
+        return []
+    rows = max(1, (n + max_per_row - 1) // max_per_row)
+    base, rem = divmod(n, rows)
+    sizes = [base] * rows
+    mid = rows // 2
+    order = sorted(range(rows), key=lambda i: (abs(i - mid), i))   # middle rows first
+    for k in range(rem):
+        sizes[order[k]] += 1
+    return sizes
 
 _TINT = QColor(5, 5, 14, 218)   # same dark veil the Gallery split views use
 
@@ -504,10 +545,11 @@ def _season_tables_data(season: dict):
     rd = season.get('rounds_detail')
     if not rd:
         return None
-    codes, race_maps, col_round = [], [], []
+    codes, countries, race_maps, col_round = [], [], [], []
     for ri, rnd in enumerate(rd):
-        codes.append(_CODE3.get(rnd.get('country', ''),
-                                str(rnd.get('country', ''))[:3].upper()))
+        country = str(rnd.get('country', ''))
+        countries.append(country)
+        codes.append(_CODE3.get(country, country[:3].upper()))
         for race in rnd.get('races', []):
             race_maps.append({r['name']: r for r in race})
             col_round.append(ri)
@@ -539,7 +581,7 @@ def _season_tables_data(season: dict):
             manu_total[m] = manu_total.get(m, 0) + p
 
     return {
-        'codes': codes, 'col_round': col_round, 'race_maps': race_maps,
+        'codes': codes, 'countries': countries, 'col_round': col_round, 'race_maps': race_maps,
         'names': names, 'rider_total': rider_total,
         'riders_sorted': sorted(names, key=lambda n: -rider_total[n]),
         'team_race': team_race, 'team_total': team_total,
@@ -562,7 +604,7 @@ def _build_matrix(data: dict, kind: str):
     race_labels = [_race_label(codes, col_round, c) for c in range(n_races)]
 
     if kind == 'riders':
-        headers = ['P', '#', 'RIDER'] + race_labels + ['PTS']
+        headers = ['P', 'RIDER', 'MANUFACTURER'] + race_labels + ['PTS']
         keys, res0 = data['riders_sorted'], 3
     else:
         label = 'TEAM' if kind == 'teams' else 'MANUFACTURER'
@@ -572,23 +614,35 @@ def _build_matrix(data: dict, kind: str):
 
     t = make_table(headers)
     t.verticalHeader().setDefaultSectionSize(30)
+    t.setIconSize(QSize(30, 20))
+    # Round headers = country flags (both race columns of a round share the flag),
+    # falling back to the 3-letter code when a flag file is missing.
+    countries = data.get('countries', [])
+    for c in range(n_races):
+        country = countries[col_round[c]] if col_round[c] < len(countries) else ''
+        hdr = QTableWidgetItem()
+        fp = _FLAGS / f'{_ISO2.get(country, "")}.png'
+        if fp.exists():
+            hdr.setIcon(QIcon(str(fp)))
+        else:
+            hdr.setText(_CODE3.get(country, country[:3].upper()))
+        hdr.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        t.setHorizontalHeaderItem(res0 + c, hdr)
     t.setRowCount(len(keys))
+    neutral = row_bg(_DEFAULT_COLOR)     # plain dark — no team tint (riders matrix)
     for i, key in enumerate(keys):
         if kind == 'riders':
-            info  = data['names'][key]
-            color = _team_color(info['team'], info['manufacturer'])
+            info = data['names'][key]
             total = data['rider_total'][key]
-        elif kind == 'teams':
-            color = TEAM_COLOR.get(key, _DEFAULT_COLOR); total = data['team_total'][key]
+            bg = neutral
+            # P / RIDER / MANUFACTURER — black background, white text, no accent.
+            t.setItem(i, 0, _cell(i + 1, bg, _CELL_W, bold=True, center=True, size=9))
+            t.setItem(i, 1, _cell(key.upper(), bg, _CELL_W, bold=True, size=11))
+            t.setItem(i, 2, _cell(info['manufacturer'], bg, _CELL_W, size=10))
         else:
-            color = MANU_COLOR.get(key, _DEFAULT_COLOR); total = data['manu_total'][key]
-        bg, lighter = row_bg(color), _lighten(color)
-
-        t.setItem(i, 0, _cell(i + 1, bg, _CELL_W, bold=True, center=True, size=9, accent=color))
-        if kind == 'riders':
-            t.setItem(i, 1, _cell(f"#{info['bike']}", bg, lighter, bold=True, center=True, size=11))
-            t.setItem(i, 2, _cell(key.upper(), bg, _CELL_W, bold=True, size=11))
-        else:
+            total = data['team_total'][key] if kind == 'teams' else data['manu_total'][key]
+            bg = neutral       # black background, white text, no accent
+            t.setItem(i, 0, _cell(i + 1, bg, _CELL_W, bold=True, center=True, size=9))
             t.setItem(i, 1, _cell(key.upper(), bg, _CELL_W, bold=True, size=11))
 
         for c in range(n_races):
@@ -608,16 +662,27 @@ def _build_matrix(data: dict, kind: str):
 
         t.setItem(i, res0 + n_races, _cell(total, bg, _CELL_W, bold=True, center=True, size=11))
 
-    # Explicit widths only — resizeColumnsToContents() measures every cell and
-    # is very slow on a wide matrix; the name column stretches to fill the rest.
+    # Fixed widths (no Stretch on the name column — that squeezed it to a single
+    # letter on a wide season). When the matrix is wider than the viewport the
+    # table shows a horizontal scrollbar instead of truncating.
     t.setColumnWidth(0, 38)
     if kind == 'riders':
-        t.setColumnWidth(1, 46)
+        t.setColumnWidth(1, 240)   # RIDER (roomy — some names are long)
+        t.setColumnWidth(2, 140)   # MANUFACTURER
+    elif kind == 'teams':
+        t.setColumnWidth(1, 250)   # team names are long (e.g. "Kawasaki Factory Racing")
+    else:
+        t.setColumnWidth(1, 180)   # manufacturer
     for c in range(n_races):
-        t.setColumnWidth(res0 + c, 40)
-    t.setColumnWidth(res0 + n_races, 58)      # PTS
-    name_col = 2 if kind == 'riders' else 1
-    t.horizontalHeader().setSectionResizeMode(name_col, QHeaderView.ResizeMode.Stretch)
+        t.setColumnWidth(res0 + c, 42)
+    t.setColumnWidth(res0 + n_races, 60)      # PTS
+    t.horizontalHeader().setStretchLastSection(False)
+    t.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    # Centre the PTS header so it lines up with the centred point totals below.
+    pts_hdr = t.horizontalHeaderItem(res0 + n_races)
+    if pts_hdr is not None:
+        pts_hdr.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
     return t
 
 
@@ -669,8 +734,6 @@ def _build_race_by_race(data: dict):
             _rbr_line('WINNING TEAM',         winner['team'].upper() if winner else '—'),
             _rbr_line('WINNING MANUFACTURER', winner['manufacturer'].upper() if winner else '—'),
         ])
-        # One rich-text label per card instead of a dozen QLabels — building
-        # hundreds of styled labels per season was the main race-by-race cost.
         body = QLabel(f"<table cellspacing=0 cellpadding=0>{rows}</table>")
         body.setTextFormat(Qt.TextFormat.RichText)
         body.setStyleSheet('background:transparent; border:none;')
@@ -682,9 +745,133 @@ def _build_race_by_race(data: dict):
     return scroll
 
 
+class _GPBox(QFrame):
+    """A square Grand-Prix tile: the country flag over 'Grand Prix of <country>'."""
+
+    clicked = pyqtSignal(int)
+
+    def __init__(self, idx: int, country: str):
+        super().__init__()
+        self._idx = idx
+        self._selected = False
+        self.setFixedSize(158, 158)
+
+        col = QVBoxLayout(self)
+        col.setContentsMargins(12, 12, 12, 12)
+        col.setSpacing(10)
+        col.addStretch(1)
+
+        flag = QLabel()
+        flag.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pix = _flag_pixmap(country, 52, 78)     # uniform 78×52 for every flag
+        if pix is not None:
+            flag.setPixmap(pix)
+            flag.setStyleSheet('background: transparent; border: none;')
+        else:
+            flag.setText(country[:3].upper())
+            flag.setFont(QFont('Segoe UI', 16, QFont.Weight.Bold))
+            flag.setStyleSheet('color:#8a8aa2; background: transparent; border: none;')
+        col.addWidget(flag, 0, Qt.AlignmentFlag.AlignCenter)
+
+        self._name = QLabel(f'Grand Prix of\n{country}')
+        self._name.setWordWrap(True)
+        self._name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._name.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+        self._name.setStyleSheet('color:#cfcfe0; background: transparent; border: none;')
+        col.addWidget(self._name, 0, Qt.AlignmentFlag.AlignCenter)
+        col.addStretch(1)
+
+    def set_selected(self, v: bool):
+        self._selected = v
+        self._name.setStyleSheet(
+            f'color:{"#ffffff" if v else "#cfcfe0"}; background: transparent; border: none;')
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = self.rect().adjusted(1, 1, -1, -1)
+        if self._selected:
+            p.setBrush(QColor(224, 40, 64, 45))
+            p.setPen(QPen(QColor('#e02840'), 2))
+        else:
+            p.setBrush(QColor(255, 255, 255, 8))
+            p.setPen(QPen(QColor('#2a2a3a'), 1))
+        p.drawRoundedRect(r, 12, 12)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._idx)
+        super().mousePressEvent(e)
+
+
+def _build_gp_detail(season: dict, round_idx: int):
+    """Stats for one Grand Prix (its round's races)."""
+    rounds = season.get('rounds_detail', [])
+    rnd = rounds[round_idx] if 0 <= round_idx < len(rounds) else {}
+    country = rnd.get('country', '')
+
+    scroll = _make_scroll_area()
+    cont = QWidget()
+    cont.setStyleSheet('background: transparent;')
+    lay = QVBoxLayout(cont)
+    lay.setContentsMargins(0, 0, 12, 0)
+    lay.setSpacing(14)
+
+    head = QWidget(); head.setStyleSheet('background: transparent;')
+    hl = QHBoxLayout(head); hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(16)
+    fpix = _flag_pixmap(country, 46)
+    if fpix is not None:
+        fl = QLabel(); fl.setPixmap(fpix)
+        fl.setStyleSheet('background: transparent; border: none;')
+        hl.addWidget(fl)
+    title = QLabel(f'GRAND PRIX OF {country.upper()}')
+    title.setFont(QFont('Segoe UI', 18, QFont.Weight.Bold))
+    title.setStyleSheet('color:#ffffff; letter-spacing:1px; background: transparent; border: none;')
+    hl.addWidget(title); hl.addStretch(1)
+    lay.addWidget(head)
+    lay.addSpacing(6)
+
+    for rj, race in enumerate(rnd.get('races', [])):
+        pole      = next((r for r in race if r['pole']), None)
+        fast      = next((r for r in race if r['fastest_lap']), None)
+        finishers = sorted((r for r in race if not r['dnf']), key=lambda r: r['pos'])
+        winner    = finishers[0] if finishers else None
+        podium    = finishers[:3]
+        podium_txt = '     '.join(f"{i + 1}. {r['name'].upper()}"
+                                  for i, r in enumerate(podium)) if podium else '—'
+        rows = ''.join([
+            _rbr_line('POLESITTER',           pole['name'].upper() if pole else '—'),
+            _rbr_line('FASTEST LAP',          fast['name'].upper() if fast else '—'),
+            _rbr_line('WINNING RIDER',        winner['name'].upper() if winner else '—', '#e8b53a'),
+            _rbr_line('PODIUM',               podium_txt),
+            _rbr_line('WINNING TEAM',         winner['team'].upper() if winner else '—'),
+            _rbr_line('WINNING MANUFACTURER', winner['manufacturer'].upper() if winner else '—'),
+        ])
+        card = QFrame()
+        card.setStyleSheet(
+            'QFrame { background: rgba(255,255,255,6); border: 1px solid #23233a; border-radius: 10px; }'
+            'QLabel { background: transparent; border: none; }')
+        cl = QVBoxLayout(card); cl.setContentsMargins(18, 14, 18, 16); cl.setSpacing(8)
+        rt = QLabel(f'RACE {rj + 1}')
+        rt.setFont(QFont('Segoe UI', 12, QFont.Weight.Bold))
+        rt.setStyleSheet('color:#ffffff; letter-spacing:1px; background: transparent; border: none;')
+        cl.addWidget(rt)
+        body = QLabel(f"<table cellspacing=0 cellpadding=0>{rows}</table>")
+        body.setTextFormat(Qt.TextFormat.RichText)
+        body.setStyleSheet('background: transparent; border: none;')
+        cl.addWidget(body)
+        lay.addWidget(card)
+
+    lay.addStretch(1)
+    scroll.setWidget(cont)
+    return scroll
+
+
 class _SeasonStatDetail(QWidget):
     SUBCARDS   = ['FINAL STANDINGS', 'RACE BY RACE']
     CATEGORIES = ['RIDERS', 'TEAMS', 'MANUFACTURERS']
+    _GP_COLS   = 5
 
     def __init__(self):
         super().__init__()
@@ -696,25 +883,18 @@ class _SeasonStatDetail(QWidget):
         self._outer.setSpacing(0)
         self._season = None
         self._data = None
-        self._focus = 0          # highlighted sub-card: 0 = Final Standings, 1 = Race by Race
-        self._viewing = False    # False = choosing a sub-card, True = viewing its content
-        self._category = 0       # Riders/Teams/Manu within Final Standings
+        self._view = 'select'      # 'select' | 'fs' | 'rbr' | 'gp'
+        self._focus = 0            # highlighted sub-card: 0 = Final Standings, 1 = Race by Race
+        self._category = 0         # Riders/Teams/Manu within Final Standings
+        self._gp_focus = 0         # highlighted Grand-Prix box
+        self._gp_boxes = []
+        self._gp_rows = []
+        self._matrices = {}
         self._scrollable = None
-        self._cache = {}         # built content widgets, reused across renders
-        self._placeholder('← Select a season')
+        self._warm = None
+        self._clear()              # empty until a season loads
 
-    # ── state / helpers ────────────────────────────────────────────────────────
-    def _placeholder(self, text: str):
-        self._clear()
-        self._scrollable = None
-        ph = QLabel(text)
-        ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ph.setFont(QFont('Segoe UI', 13))
-        ph.setStyleSheet('color: #2d2d44; background: transparent; border: none;')
-        self._outer.addStretch(1)
-        self._outer.addWidget(ph, 0, Qt.AlignmentFlag.AlignCenter)
-        self._outer.addStretch(1)
-
+    # ── helpers ─────────────────────────────────────────────────────────────────
     def _clear(self):
         while self._outer.count():
             item = self._outer.takeAt(0)
@@ -722,97 +902,255 @@ class _SeasonStatDetail(QWidget):
             if w is not None:
                 w.setParent(None)
 
-    def load(self, season: dict):
-        self._season   = season
-        self._data     = _season_tables_data(season)
-        self._focus    = 0
-        self._viewing  = False
-        self._category = 0
-        self._cache    = {}      # heavy tables/lists are built lazily, once each
-        self._render()
-
-    def _matrix(self, kind: str):
-        m = self._cache.get(kind)
-        if m is None:
-            m = _build_matrix(self._data, kind)
-            self._cache[kind] = m
-        return m
-
-    def _rbr(self):
-        r = self._cache.get('rbr')
-        if r is None:
-            r = _build_race_by_race(self._data)
-            self._cache['rbr'] = r
-        return r
-
-    @property
-    def viewing(self) -> bool:
-        return self._viewing
-
-    def move_focus(self, delta: int):
-        if self._data is None or self._viewing:
-            return
-        self._focus = (self._focus + delta) % 2
-        self._render()
-
-    def enter(self):
-        if self._data is None or self._viewing:
-            return
-        self._viewing = True
-        self._render()
-
-    def back(self) -> bool:
-        """Leave view mode → sub-card select. True if it consumed the key."""
-        if self._viewing:
-            self._viewing = False
-            self._render()
-            return True
-        return False
-
-    def cycle_category(self, delta: int):
-        if self._viewing and self._focus == 0 and self._data is not None:
-            self._category = (self._category + delta) % 3
-            self._render()
-
-    def scroll(self, delta: int):
-        if self._scrollable is not None:
-            bar = self._scrollable.verticalScrollBar()
-            bar.setValue(bar.value() + delta)
-
-    # ── render ─────────────────────────────────────────────────────────────────
-    def _render(self):
+    def _placeholder(self, text: str = ''):
+        # Browse state (no season open): nothing shown — no annotation text.
+        if self._warm is not None:
+            self._warm.stop()
         self._clear()
         self._scrollable = None
 
+    # ── build (once per season) ─────────────────────────────────────────────────
+    def load(self, season: dict):
+        self._season   = season
+        self._data     = _season_tables_data(season)
+        self._view     = 'select'
+        self._focus    = 0
+        self._category = 0
+        self._gp_focus = 0
+        self._matrices = {}
+        self._gp_boxes = []
+        self._gp_rows = []
+        self._build()
+
+    def _build(self):
+        if self._warm is not None:
+            self._warm.stop()
+        self._clear()
+        self._scrollable = None
         if self._data is None:
             self._render_legacy(self._season)
             return
 
-        # Horizontal sub-cards; Enter views the highlighted one.
-        self._outer.addWidget(_subcard_cards(self.SUBCARDS, self._focus))
+        # Sub-card cards (always on top) — highlight follows _focus.
+        self._subcard_holder = QWidget()
+        self._subcard_holder.setStyleSheet('background: transparent;')
+        self._subcard_lay = QVBoxLayout(self._subcard_holder)
+        self._subcard_lay.setContentsMargins(0, 0, 0, 0)
+        self._subcard_lay.setSpacing(0)
+        self._outer.addWidget(self._subcard_holder)
         self._outer.addSpacing(16)
 
-        if not self._viewing:
-            hint = QLabel(f'Press Enter to view {self.SUBCARDS[self._focus].title()}')
-            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint.setFont(QFont('Segoe UI', 12))
-            hint.setStyleSheet('color: #2d2d44; background: transparent; border: none;')
-            self._outer.addStretch(1)
-            self._outer.addWidget(hint, 0, Qt.AlignmentFlag.AlignCenter)
-            self._outer.addStretch(1)
-            return
+        # One content stack, switched by view (no re-layout on transition).
+        self._cstack = QStackedWidget()
+        self._cstack.setStyleSheet('background: transparent;')
 
-        if self._focus == 0:                      # Final Standings
-            self._outer.addWidget(_tab_bar(self.CATEGORIES, self._category, accent='#318CE7'))
-            self._outer.addSpacing(12)
-            kind  = ('riders', 'teams', 'manu')[self._category]
-            table = self._matrix(kind)
-            self._outer.addWidget(table, 1)
-            self._scrollable = table
-        else:                                     # Race by Race
-            rbr = self._rbr()
-            self._outer.addWidget(rbr, 1)
-            self._scrollable = rbr
+        self._p_empty = QWidget()
+        self._p_empty.setStyleSheet('background: transparent;')
+        self._cstack.addWidget(self._p_empty)
+
+        # Final Standings: category tab bar + matrix stack (full width).
+        self._p_fs = QWidget(); self._p_fs.setStyleSheet('background: transparent;')
+        fsl = QVBoxLayout(self._p_fs); fsl.setContentsMargins(0, 0, 0, 0); fsl.setSpacing(0)
+        self._cat_holder = QWidget(); self._cat_holder.setStyleSheet('background: transparent;')
+        self._cat_lay = QVBoxLayout(self._cat_holder)
+        self._cat_lay.setContentsMargins(0, 0, 0, 0); self._cat_lay.setSpacing(0)
+        fsl.addWidget(self._cat_holder); fsl.addSpacing(12)
+        self._fs_stack = QStackedWidget(); self._fs_stack.setStyleSheet('background: transparent;')
+        fsl.addWidget(self._fs_stack, 1)
+        self._cstack.addWidget(self._p_fs)
+
+        # Race by Race: grid of Grand-Prix boxes.
+        self._p_rbr = self._make_gp_grid()
+        self._cstack.addWidget(self._p_rbr)
+
+        # Grand-Prix detail: filled on demand.
+        self._p_gp = QWidget(); self._p_gp.setStyleSheet('background: transparent;')
+        self._gp_lay = QVBoxLayout(self._p_gp)
+        self._gp_lay.setContentsMargins(0, 0, 0, 0); self._gp_lay.setSpacing(0)
+        self._cstack.addWidget(self._p_gp)
+
+        self._outer.addWidget(self._cstack, 1)
+        self._refresh()
+
+        # Warm the Final-Standings matrices in the background.
+        self._warm = QTimer(self)
+        self._warm.timeout.connect(self._prewarm_step)
+        self._warm.start(30)
+
+    def _make_gp_grid(self):
+        scroll = _make_scroll_area()
+        cont = QWidget(); cont.setStyleSheet('background: transparent;')
+        outer = QVBoxLayout(cont)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(16)
+        outer.addStretch(1)                       # centre the block vertically
+
+        rounds = self._season.get('rounds_detail', [])
+        self._gp_boxes = []
+        self._gp_rows = _row_sizes(len(rounds))   # e.g. 13 → [4, 5, 4]
+        idx = 0
+        for count in self._gp_rows:
+            rw = QWidget(); rw.setStyleSheet('background: transparent;')
+            row = QHBoxLayout(rw)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(16)
+            row.addStretch(1)                     # centre the row horizontally
+            for _ in range(count):
+                rnd = rounds[idx]
+                box = _GPBox(idx, rnd.get('country', ''))
+                box.clicked.connect(self._open_gp)
+                row.addWidget(box)
+                self._gp_boxes.append(box)
+                idx += 1
+            row.addStretch(1)
+            outer.addWidget(rw)
+        outer.addStretch(1)
+        scroll.setWidget(cont)
+        return scroll
+
+    def _matrix(self, kind: str):
+        m = self._matrices.get(kind)
+        if m is None:
+            m = _build_matrix(self._data, kind)
+            self._matrices[kind] = m
+            self._fs_stack.addWidget(m)
+        return m
+
+    def _prewarm_step(self):
+        for kind in ('riders', 'teams', 'manu'):
+            if kind not in self._matrices:
+                self._matrix(kind)
+                return
+        self._warm.stop()
+
+    # ── refresh (light — no heavy rebuild) ──────────────────────────────────────
+    def _refresh(self):
+        while self._subcard_lay.count():
+            it = self._subcard_lay.takeAt(0); w = it.widget()
+            if w is not None:
+                w.setParent(None)
+        self._subcard_lay.addWidget(_subcard_cards(self.SUBCARDS, self._focus))
+
+        if self._view == 'select':
+            self._cstack.setCurrentWidget(self._p_empty)
+            self._scrollable = None
+        elif self._view == 'fs':
+            while self._cat_lay.count():
+                it = self._cat_lay.takeAt(0); w = it.widget()
+                if w is not None:
+                    w.setParent(None)
+            self._cat_lay.addWidget(_tab_bar(self.CATEGORIES, self._category, accent='#318CE7'))
+            pg = self._matrix(('riders', 'teams', 'manu')[self._category])
+            self._fs_stack.setCurrentWidget(pg)
+            self._cstack.setCurrentWidget(self._p_fs)
+            self._scrollable = pg
+        elif self._view == 'rbr':
+            for i, b in enumerate(self._gp_boxes):
+                b.set_selected(i == self._gp_focus)
+            self._cstack.setCurrentWidget(self._p_rbr)
+            self._scrollable = None
+        elif self._view == 'gp':
+            self._cstack.setCurrentWidget(self._p_gp)
+
+    def _open_gp(self, idx: int):
+        if not (0 <= idx < len(self._gp_boxes)):
+            return
+        self._gp_focus = idx
+        while self._gp_lay.count():
+            it = self._gp_lay.takeAt(0); w = it.widget()
+            if w is not None:
+                w.setParent(None)
+        scroll = _build_gp_detail(self._season, idx)
+        self._gp_lay.addWidget(scroll)
+        self._view = 'gp'
+        self._scrollable = scroll
+        self._refresh()
+
+    # ── navigation ──────────────────────────────────────────────────────────────
+    def handle_key(self, key: int):
+        """Drive the detail. Returns 'close' when the user backs out of the top
+        level (so the caller reopens the season list)."""
+        K = Qt.Key
+        if self._data is None:
+            return 'close' if key in (K.Key_Escape, K.Key_Backspace) else None
+
+        v = self._view
+        if v == 'select':
+            if key in (K.Key_Left, K.Key_Right):
+                self._focus = (self._focus + (1 if key == K.Key_Right else -1)) % 2
+                self._refresh()
+            elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+                self._view = 'fs' if self._focus == 0 else 'rbr'
+                self._gp_focus = 0
+                self._refresh()
+            elif key in (K.Key_Escape, K.Key_Backspace):
+                return 'close'
+        elif v == 'fs':
+            if key in (K.Key_Left, K.Key_Right):        # scroll the wide matrix
+                self._hscroll(-110 if key == K.Key_Left else 110)
+            elif key in (K.Key_Up, K.Key_Down):
+                self._scroll(-60 if key == K.Key_Up else 60)
+            elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+                self._category = (self._category + 1) % 3   # cycle Riders/Teams/Manu
+                self._refresh()
+            elif key in (K.Key_Escape, K.Key_Backspace):
+                self._view = 'select'
+                self._refresh()
+        elif v == 'rbr':
+            if key in (K.Key_Left, K.Key_Right, K.Key_Up, K.Key_Down):
+                self._grid_nav(key)
+            elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+                self._open_gp(self._gp_focus)
+            elif key in (K.Key_Escape, K.Key_Backspace):
+                self._view = 'select'
+                self._refresh()
+        elif v == 'gp':
+            if key in (K.Key_Up, K.Key_Down):
+                self._scroll(-60 if key == K.Key_Up else 60)
+            elif key in (K.Key_Escape, K.Key_Backspace):
+                self._view = 'rbr'
+                self._refresh()
+        return None
+
+    def _grid_nav(self, key: int):
+        n = len(self._gp_boxes)
+        if n == 0:
+            return
+        K = Qt.Key
+        i = self._gp_focus
+        rows = self._gp_rows or [n]
+        starts, s = [], 0
+        for c in rows:
+            starts.append(s); s += c
+        # locate current (row, col)
+        row = col = 0
+        for r, (st, ct) in enumerate(zip(starts, rows)):
+            if st <= i < st + ct:
+                row, col = r, i - st
+                break
+        if key == K.Key_Left:
+            i = (i - 1) % n
+        elif key == K.Key_Right:
+            i = (i + 1) % n
+        elif key == K.Key_Up and row > 0:
+            i = starts[row - 1] + min(col, rows[row - 1] - 1)
+        elif key == K.Key_Down and row < len(rows) - 1:
+            i = starts[row + 1] + min(col, rows[row + 1] - 1)
+        self._gp_focus = i
+        self._refresh()
+        self._p_rbr.ensureWidgetVisible(self._gp_boxes[i])
+
+    def _scroll(self, delta: int):
+        if self._scrollable is not None:
+            bar = self._scrollable.verticalScrollBar()
+            if bar is not None:
+                bar.setValue(bar.value() + delta)
+
+    def _hscroll(self, delta: int):
+        if self._scrollable is not None:
+            bar = self._scrollable.horizontalScrollBar()
+            if bar is not None:
+                bar.setValue(bar.value() + delta)
 
     def _render_legacy(self, s: dict):
         """Season archived before per-round recording — show a note plus the
@@ -944,15 +1282,15 @@ class _SeasonStatsView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        left_outer, self._list_lay, self._left_scroll = _make_list_panel()
-        root.addWidget(left_outer, 3)
+        self._left_outer, self._list_lay, self._left_scroll = _make_list_panel()
+        root.addWidget(self._left_outer, 3)
 
-        vd = QFrame(); vd.setFixedWidth(1)
-        vd.setStyleSheet('background: #111122; border: none;')
-        root.addWidget(vd)
+        self._vd = QFrame(); self._vd.setFixedWidth(1)
+        self._vd.setStyleSheet('background: #111122; border: none;')
+        root.addWidget(self._vd)
 
-        # Added directly (no outer scroll): the detail manages its own internal
-        # scrolling for the matrix / race-by-race lists.
+        # The season list (left) is hidden once a season is opened, so the detail
+        # takes the whole width; the detail manages its own internal scrolling.
         self._detail = _SeasonStatDetail()
         root.addWidget(self._detail, 7)
 
@@ -976,15 +1314,14 @@ class _SeasonStatsView(QWidget):
         self.reset_selection()
 
     def reset_selection(self):
-        """Highlight the first card but leave the detail empty — a season only
-        reveals its stats once the user opens it with Enter (or a click)."""
+        """Back to browsing: show the season list, empty detail, no annotation."""
         self._opened_key = None
         self._focus_key  = None
+        self._left_outer.show()
+        self._vd.show()
+        self._detail._placeholder()
         if self._items:
-            self._detail._placeholder('Select a season and press Enter')
             self._set_focus(next(iter(self._items)))
-        else:
-            self._detail._placeholder('No seasons yet')
 
     def _set_focus(self, key: str):
         for k, it in self._items.items():
@@ -1009,40 +1346,26 @@ class _SeasonStatsView(QWidget):
             return
         self._set_focus(key)
         self._opened_key = key
+        self._left_outer.hide()                 # season list gone → full-width detail
+        self._vd.hide()
         self._detail.load(self._seasons[key])
 
     def handle_key(self, key: int):
-        """All keys while the Season Stats split view is showing. Returns
-        'back' when the caller should leave the split view."""
-        # Esc steps back one layer at a time: view → sub-card select → browse.
-        if key in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace):
-            if self._opened_key is None:
-                return 'back'
-            if self._detail.back():             # was viewing → back to sub-cards
-                return True
-            self.reset_selection()              # sub-card select → close season
-            return True
-
+        """All keys while the Season Stats view is showing. Returns 'back' when
+        the caller should leave the split view."""
         if self._opened_key is None:            # browsing season cards
+            if key in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace):
+                return 'back'
             if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
                 self.move_focus(key == Qt.Key.Key_Down)
             elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
                 self.open_focused()
             return True
 
-        # a season is open
-        d = self._detail
-        if not d.viewing:                       # choosing a sub-card
-            if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
-                d.move_focus(1 if key == Qt.Key.Key_Right else -1)
-            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
-                d.enter()
-            return True
-        # viewing a sub-card — ◀▶ category (Final Standings), ▲▼ scroll
-        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
-            d.cycle_category(1 if key == Qt.Key.Key_Right else -1)
-        elif key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-            d.scroll(-60 if key == Qt.Key.Key_Up else 60)
+        # A season is open — the detail owns its own key handling. When it backs
+        # out of its top level, reopen the season list.
+        if self._detail.handle_key(key) == 'close':
+            self.reset_selection()
         return True
 
     def paintEvent(self, event):

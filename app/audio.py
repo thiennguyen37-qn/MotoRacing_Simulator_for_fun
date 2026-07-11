@@ -5,7 +5,8 @@ _AUDIO_DIR = Path(__file__).parent.parent / 'audio'
 _EXTS = ('.mp3', '.ogg', '.wav')
 
 try:
-    from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
+    from PyQt6.QtMultimedia import (QMediaPlayer, QAudioOutput, QMediaMetaData,
+                                    QSoundEffect)
     from PyQt6.QtCore import QObject, QUrl, pyqtSignal
     _OK = True
 except ImportError:
@@ -53,12 +54,15 @@ if _OK:
             self._music_player.metaDataChanged.connect(self._on_metadata)
             self._music_player.playbackStateChanged.connect(self._on_playback_state)
 
-            self._sfx_player = QMediaPlayer()
-            self._sfx_out = QAudioOutput()
-            self._sfx_player.setAudioOutput(self._sfx_out)
-            self._sfx_out.setVolume(0.8)
+            # SFX are preloaded once (see _load_sfx). Reusing a single
+            # QMediaPlayer with setSource() on every key press rebuilt the whole
+            # decode pipeline each time, which made every navigation hitch.
+            self._sfx: dict[str, 'QSoundEffect'] = {}
+            self._sfx_players: dict[str, 'QMediaPlayer'] = {}
+            self._sfx_outs: list = []
 
             self._load_playlist()
+            self._load_sfx()
 
         def _load_playlist(self) -> None:
             music_dir = _AUDIO_DIR / 'music'
@@ -67,6 +71,32 @@ if _OK:
                 files.extend(music_dir.glob(f'*{ext}'))
             self._playlist = sorted(files, key=lambda p: p.name.lower())
             self._track_info = [_parse_track(p) for p in self._playlist]
+
+        def _load_sfx(self) -> None:
+            """Preload each SFX once. WAV files use QSoundEffect (low-latency,
+            no per-play decode); anything else keeps its own preloaded player."""
+            sfx_dir = _AUDIO_DIR / 'sfx'
+            if not sfx_dir.exists():
+                return
+            seen: set[str] = set()
+            for ext in _EXTS:
+                for p in sorted(sfx_dir.glob(f'*{ext}')):
+                    if p.stem in seen:
+                        continue
+                    seen.add(p.stem)
+                    if ext == '.wav':
+                        eff = QSoundEffect(self)
+                        eff.setSource(QUrl.fromLocalFile(str(p)))
+                        eff.setVolume(0.8)
+                        self._sfx[p.stem] = eff
+                    else:
+                        pl = QMediaPlayer()
+                        out = QAudioOutput()
+                        pl.setAudioOutput(out)
+                        out.setVolume(0.8)
+                        pl.setSource(QUrl.fromLocalFile(str(p)))
+                        self._sfx_players[p.stem] = pl
+                        self._sfx_outs.append(out)
 
         def start(self) -> None:
             if self._playlist and not self._started:
@@ -118,12 +148,14 @@ if _OK:
         def play_sfx(self, key: str) -> None:
             if self._muted:
                 return
-            for ext in _EXTS:
-                p = _AUDIO_DIR / 'sfx' / f'{key}{ext}'
-                if p.exists():
-                    self._sfx_player.setSource(QUrl.fromLocalFile(str(p)))
-                    self._sfx_player.play()
-                    return
+            eff = self._sfx.get(key)
+            if eff is not None:
+                eff.play()          # retriggers from the start; no re-decode
+                return
+            pl = self._sfx_players.get(key)
+            if pl is not None:
+                pl.setPosition(0)
+                pl.play()
 
         def toggle_mute(self) -> None:
             self._muted = not self._muted

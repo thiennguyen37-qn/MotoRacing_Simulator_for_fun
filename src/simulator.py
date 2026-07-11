@@ -158,6 +158,7 @@ def run_race(df, circuit, grid_all_df):
                             'bike_number': s['bike_number'], 'name': name,
                             'team': s['team'], 'manufacturer': s['manufacturer'],
                             'time_fmt': fmt_lap(s['cumul_time']), 'gap_fmt': fmt_gap(gap),
+                            'grid_pos': s['grid_pos'],
                             'fastest_lap': name == fl['name'], 'dnf': False})
         pts_rows.append({'name': name, 'bike_number': s['bike_number'],
                          'team': s['team'], 'manufacturer': s['manufacturer'],
@@ -167,6 +168,7 @@ def run_race(df, circuit, grid_all_df):
                             'bike_number': d['bike_number'], 'name': d['name'],
                             'team': d['team'], 'manufacturer': d['manufacturer'],
                             'time_fmt': '—', 'gap_fmt': f"Lap {d['lap']}",
+                            'grid_pos': d['grid_pos'],
                             'fastest_lap': False, 'dnf': True})
         pts_rows.append({'name': d['name'], 'bike_number': d['bike_number'],
                          'team': d['team'], 'manufacturer': d['manufacturer'],

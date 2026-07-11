@@ -403,12 +403,16 @@ class ChampionshipPage(QWizardPage):
             return
         rounds = self._season_rounds()
 
+        def _blank_stat():
+            return {'wins': 0, 'podiums': 0, 'poles': 0, 'fastest_laps': 0,
+                    'dnfs': 0, 'races': 0}
+
         stats = {}
         for rd in rounds:
-            for df in rd['races']:
+            races = rd['races']
+            for df in races:
                 for _, r in df.iterrows():
-                    s = stats.setdefault(r['name'],
-                                         {'wins': 0, 'podiums': 0, 'dnfs': 0, 'races': 0})
+                    s = stats.setdefault(r['name'], _blank_stat())
                     s['races'] += 1
                     if bool(r['dnf']):
                         s['dnfs'] += 1
@@ -416,6 +420,13 @@ class ChampionshipPage(QWizardPage):
                         pos = int(r['pos'])
                         s['wins']    += pos == 1
                         s['podiums'] += pos <= 3
+                    if bool(r.get('fastest_lap', False)):
+                        s['fastest_laps'] += 1
+            # Pole is set once per round (both races share the grid), so count it
+            # from the round's first race to avoid double-counting.
+            if races and 'grid_pos' in races[0].columns:
+                for _, r in races[0][races[0]['grid_pos'] == 1].iterrows():
+                    stats.setdefault(r['name'], _blank_stat())['poles'] += 1
 
         standings = [{'name': str(r['name']), 'team': str(r['team']),
                       'manufacturer': str(r['manufacturer']), 'points': int(r['points'])}

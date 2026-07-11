@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QWizardPage, QHBoxLayout, QVBoxLayout,
                               QWidget, QStackedWidget)
 from PyQt6.QtGui import (QFont, QPixmap, QPainter, QColor, QPen,
                           QPainterPath, QLinearGradient)
-from PyQt6.QtCore import Qt, QRectF, QRect, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF, QRect, pyqtSignal, QTimer
 
 from app.widgets.video_bg import VideoBackground
 
@@ -26,6 +26,24 @@ _BIKE_IMAGE: dict[str, str] = {
     'Phoenix Motorsport':      'Triumph_Phoenix.png',
     'Inferno Factory':         'Honda_Inferno.png',
 }
+
+# Decoded + scaled bike images, cached: the team detail rebuilds on every
+# navigation key, and re-reading/scaling the PNG each time made it lag.
+_BIKE_PIX_CACHE: dict[str, 'QPixmap | None'] = {}
+
+
+def _bike_pixmap(team_name: str):
+    if team_name in _BIKE_PIX_CACHE:
+        return _BIKE_PIX_CACHE[team_name]
+    img_file = _BIKE_IMAGE.get(team_name)
+    pix = None
+    if img_file:
+        raw = QPixmap(str(_BIKES_DIR / img_file))
+        if not raw.isNull():
+            pix = raw.scaledToHeight(180, Qt.TransformationMode.SmoothTransformation)
+    _BIKE_PIX_CACHE[team_name] = pix
+    return pix
+
 
 STATS = [
     ('rider_braking',   'Braking',          '#2196F3'),
@@ -532,17 +550,14 @@ class _TeamDetail(QWidget):
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.setSpacing(0)
 
-        img_file = _BIKE_IMAGE.get(team_name)
-        if img_file:
-            pix = QPixmap(str(_BIKES_DIR / img_file))
-            if not pix.isNull():
-                pix = pix.scaledToHeight(180, Qt.TransformationMode.SmoothTransformation)
-                img_lbl = QLabel()
-                img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                img_lbl.setStyleSheet('background: transparent; border: none;')
-                img_lbl.setPixmap(pix)
-                left_lay.addWidget(img_lbl)
-                left_lay.addSpacing(20)
+        pix = _bike_pixmap(team_name)
+        if pix is not None:
+            img_lbl = QLabel()
+            img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            img_lbl.setStyleSheet('background: transparent; border: none;')
+            img_lbl.setPixmap(pix)
+            left_lay.addWidget(img_lbl)
+            left_lay.addSpacing(20)
 
         left_lay.addWidget(_section_label('RIDERS'))
         left_lay.addSpacing(12)
@@ -612,9 +627,13 @@ class _RidersView(QWidget):
         vd.setStyleSheet('background: #111122; border: none;')
         root.addWidget(vd)
 
-        self._detail = _RiderDetail()
+        # Each rider's detail is a page in a stack: built once, then switching is
+        # just setCurrentWidget (no rebuild / relayout). The rest are warmed in
+        # the background so even held-key scrolling stays smooth.
+        self._pages: dict = {}
+        self._stack = QStackedWidget()
         scroll_r = _make_scroll_area()
-        scroll_r.setWidget(self._detail)
+        scroll_r.setWidget(self._stack)
         root.addWidget(scroll_r, 7)
 
     def populate(self):
@@ -631,14 +650,33 @@ class _RidersView(QWidget):
             self._items[r['name']] = item
         if df.shape[0] > 0:
             self._on_select(df.iloc[0]['name'])
+            self._warm = QTimer(self)
+            self._warm.timeout.connect(self._prewarm_step)
+            self._warm.start(30)                    # warm the rest while idle
+
+    def _page_for(self, name: str) -> QWidget:
+        d = self._pages.get(name)
+        if d is None:
+            d = _RiderDetail()
+            row_s = self._wiz.df[self._wiz.df['name'] == name].iloc[0]
+            d.load(row_s.to_dict())
+            self._stack.addWidget(d)
+            self._pages[name] = d
+        return d
+
+    def _prewarm_step(self):
+        rest = [n for n in self._items if n not in self._pages]
+        if rest:
+            self._page_for(rest[0])
+        else:
+            self._warm.stop()
 
     def _on_select(self, name: str):
         if self._current and self._current in self._items:
             self._items[self._current].set_selected(False)
         self._current = name
         self._items[name].set_selected(True)
-        row_s = self._wiz.df[self._wiz.df['name'] == name].iloc[0]
-        self._detail.load(row_s.to_dict())
+        self._stack.setCurrentWidget(self._page_for(name))
 
     def move_selection(self, forward: bool):
         names = list(self._items.keys())
@@ -676,9 +714,11 @@ class _TeamsView(QWidget):
         vd.setStyleSheet('background: #111122; border: none;')
         root.addWidget(vd)
 
-        self._detail = _TeamDetail()
+        # Team details are stack pages, built once (see _RidersView).
+        self._pages: dict = {}
+        self._stack = QStackedWidget()
         scroll_r = _make_scroll_area()
-        scroll_r.setWidget(self._detail)
+        scroll_r.setWidget(self._stack)
         root.addWidget(scroll_r, 7)
 
     def populate(self):
@@ -700,29 +740,41 @@ class _TeamsView(QWidget):
             self._items[team_name] = item
         if team_names:
             self._on_select(team_names[0])
+            self._warm = QTimer(self)
+            self._warm.timeout.connect(self._prewarm_step)
+            self._warm.start(30)
+
+    def _page_for(self, team_name: str) -> QWidget:
+        d = self._pages.get(team_name)
+        if d is None:
+            from app.widgets.table_utils import TEAM_COLOR, _DEFAULT_COLOR
+            df        = self._wiz.df
+            team_df   = df[df['team'] == team_name]
+            bike_row  = team_df.iloc[0].to_dict()
+            stat_cols = [c for c, _, _ in STATS]
+            riders    = team_df[['name', 'bike_number'] + stat_cols].to_dict('records')
+            tc        = TEAM_COLOR.get(team_name, _DEFAULT_COLOR)
+            d = _TeamDetail()
+            d.load(team_name=team_name, manufacturer=bike_row.get('manufacturer', ''),
+                   team_status=bike_row.get('team_status', ''), riders=riders,
+                   bike_row=bike_row, team_color=tc)
+            self._stack.addWidget(d)
+            self._pages[team_name] = d
+        return d
+
+    def _prewarm_step(self):
+        rest = [t for t in self._items if t not in self._pages]
+        if rest:
+            self._page_for(rest[0])
+        else:
+            self._warm.stop()
 
     def _on_select(self, team_name: str):
         if self._current and self._current in self._items:
             self._items[self._current].set_selected(False)
         self._current = team_name
         self._items[team_name].set_selected(True)
-
-        from app.widgets.table_utils import TEAM_COLOR, _DEFAULT_COLOR
-        df       = self._wiz.df
-        team_df  = df[df['team'] == team_name]
-        bike_row = team_df.iloc[0].to_dict()
-        stat_cols = [c for c, _, _ in STATS]
-        riders   = team_df[['name', 'bike_number'] + stat_cols].to_dict('records')
-        tc       = TEAM_COLOR.get(team_name, _DEFAULT_COLOR)
-
-        self._detail.load(
-            team_name   = team_name,
-            manufacturer= bike_row.get('manufacturer', ''),
-            team_status = bike_row.get('team_status', ''),
-            riders      = riders,
-            bike_row    = bike_row,
-            team_color  = tc,
-        )
+        self._stack.setCurrentWidget(self._page_for(team_name))
 
     def move_selection(self, forward: bool):
         teams = list(self._items.keys())

@@ -172,7 +172,7 @@ class CircuitPage(QWizardPage):
         self._pending_country = None
         self._map_timer = QTimer(self)
         self._map_timer.setSingleShot(True)
-        self._map_timer.setInterval(180)
+        self._map_timer.setInterval(60)
         self._map_timer.timeout.connect(self._update_map)
 
         # Select first item

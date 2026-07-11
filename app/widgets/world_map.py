@@ -96,6 +96,10 @@ class _Loader(QThread):
         # Reproject to Web Mercator: conformal projection that preserves
         # local shapes — countries no longer appear horizontally stretched.
         world = world.to_crs('EPSG:3857')
+        # Simplify coastlines: the canvas is tiny and every circuit view is
+        # padded to ≥~2 km/px, so a ~2.5 km tolerance is sub-pixel yet drops a
+        # lot of vertices — every map redraw is noticeably cheaper.
+        world['geometry'] = world.geometry.simplify(2500, preserve_topology=False)
         self.ready.emit(world)
 
 
@@ -153,6 +157,12 @@ class WorldMapWidget(QWidget):
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
             self._world = world.explode(index_parts=False).reset_index(drop=True)
+            # Drop sub-pixel outlying islands to cut the path count (fewer paths
+            # → faster redraws), but always keep each country's main landmass so
+            # every circuit's country can still be highlighted.
+            areas   = self._world.geometry.area
+            max_adm = areas.groupby(self._world['ADMIN']).transform('max')
+            self._world = self._world[(areas > 5e8) | (areas >= max_adm)].reset_index(drop=True)
 
         self._names = self._world['ADMIN'].tolist()
 

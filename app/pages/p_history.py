@@ -246,35 +246,29 @@ class _SeasonItem(QWidget):
 
     clicked = pyqtSignal(str)
 
-    def __init__(self, key: str, year, champion: str, team_color: QColor):
+    def __init__(self, key: str, year, team_color: QColor):
         super().__init__()
         self._key = key
         self._tc  = team_color
         self._selected = False
-        self.setFixedHeight(58)
+        self.setFixedHeight(54)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 10, 14, 10)
-        lay.setSpacing(4)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 0, 14, 0)
 
-        self._year_lbl = QLabel(str(year))
-        self._year_lbl.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
-        self._year_lbl.setStyleSheet('background: transparent; border: none; color: #aaaabc;')
-        lay.addWidget(self._year_lbl)
-
-        self._champ_lbl = QLabel(champion.upper())
-        self._champ_lbl.setFont(QFont('Segoe UI', 8))
-        self._champ_lbl.setStyleSheet('background: transparent; border: none; color: #555566;')
-        lay.addWidget(self._champ_lbl)
+        self._year_lbl = QLabel(f'{year}  SEASON STATS')
+        self._year_lbl.setFont(QFont('Segoe UI', 13, QFont.Weight.Bold))
+        self._year_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._year_lbl.setStyleSheet(
+            'background: transparent; border: none; color: #aaaabc; letter-spacing: 1px;')
+        lay.addWidget(self._year_lbl, 1)
 
     def set_selected(self, v: bool):
         self._selected = v
         self._year_lbl.setStyleSheet(
             f'background: transparent; border: none; color: {"#ffffff" if v else "#aaaabc"};')
-        self._champ_lbl.setStyleSheet(
-            f'background: transparent; border: none; color: {"#888899" if v else "#555566"};')
         self.update()
 
     def paintEvent(self, event):
@@ -412,55 +406,50 @@ class _SeasonStatDetail(QWidget):
         self._outer.addWidget(sub)
         self._outer.addSpacing(22)
         self._outer.addWidget(_divider())
-        self._outer.addSpacing(22)
+        self._outer.addSpacing(20)
 
-        body = QWidget()
-        body.setStyleSheet('background: transparent;')
-        body_lay = QHBoxLayout(body)
-        body_lay.setContentsMargins(0, 0, 0, 0)
-        body_lay.setSpacing(36)
-
-        # LEFT: final standings
-        left = QWidget()
-        left.setStyleSheet('background: transparent;')
-        left_lay = QVBoxLayout(left)
-        left_lay.setContentsMargins(0, 0, 0, 0)
-        left_lay.setSpacing(0)
-        left_lay.addWidget(_section_label('FINAL STANDINGS'))
-        left_lay.addSpacing(14)
-        for pos, st in enumerate(standings, start=1):
-            medal = _medal_color(pos) or '#ccccdd'
-            left_lay.addWidget(_text_row(
-                str(pos), st['name'].upper(), f"{int(st.get('points', 0))} PTS",
-                left_color=medal, mid_color='#ccccdd', left_w=36))
-            left_lay.addSpacing(7)
-        left_lay.addStretch(1)
-
-        # RIGHT: season facts + champion
-        right = QWidget()
-        right.setStyleSheet('background: transparent;')
-        right_lay = QVBoxLayout(right)
-        right_lay.setContentsMargins(0, 0, 0, 0)
-        right_lay.setSpacing(0)
-        right_lay.addWidget(_section_label('SEASON FACTS'))
-        right_lay.addSpacing(18)
-        right_lay.addWidget(_stat_tiles([('ROUNDS', s.get('rounds', 0)),
-                                         ('RIDERS', len(standings))]))
-        right_lay.addSpacing(24)
-        right_lay.addWidget(_divider())
-        right_lay.addSpacing(18)
-        right_lay.addWidget(_section_label('CHAMPION'))
-        right_lay.addSpacing(18)
+        # ── Season facts + champion — one full-width tile row ────────────────
         cstats = stats.get(champ.get('name', ''), {})
-        right_lay.addWidget(_stat_tiles([('POINTS', champ.get('points', 0)),
-                                         ('WINS', cstats.get('wins', 0)),
-                                         ('PODIUMS', cstats.get('podiums', 0))]))
-        right_lay.addStretch(1)
+        self._outer.addWidget(_section_label('SEASON FACTS'))
+        self._outer.addSpacing(16)
+        self._outer.addWidget(_stat_tiles([
+            ('ROUNDS',           s.get('rounds', 0)),
+            ('RIDERS',           len(standings)),
+            ('CHAMPION PTS',     champ.get('points', 0)),
+            ('CHAMPION WINS',    cstats.get('wins', 0)),
+            ('CHAMPION PODIUMS', cstats.get('podiums', 0)),
+        ]))
+        self._outer.addSpacing(28)
+        self._outer.addWidget(_divider())
+        self._outer.addSpacing(20)
 
-        body_lay.addWidget(left, 5)
-        body_lay.addWidget(right, 5)
-        self._outer.addWidget(body)
-        self._outer.addSpacing(40)
+        # ── Final standings split into two columns so all riders fit without
+        #    scrolling (wheel/keys are captured elsewhere) ────────────────────
+        self._outer.addWidget(_section_label('FINAL STANDINGS'))
+        self._outer.addSpacing(14)
+        half = (len(standings) + 1) // 2
+        cols = QWidget()
+        cols.setStyleSheet('background: transparent;')
+        cols_lay = QHBoxLayout(cols)
+        cols_lay.setContentsMargins(0, 0, 0, 0)
+        cols_lay.setSpacing(48)
+        for start in (0, half):
+            col = QWidget()
+            col.setStyleSheet('background: transparent;')
+            col_lay = QVBoxLayout(col)
+            col_lay.setContentsMargins(0, 0, 0, 0)
+            col_lay.setSpacing(0)
+            for offset, st in enumerate(standings[start:start + half]):
+                pos   = start + offset + 1
+                medal = _medal_color(pos) or '#ccccdd'
+                col_lay.addWidget(_text_row(
+                    str(pos), st['name'].upper(), f"{int(st.get('points', 0))} PTS",
+                    left_color=medal, mid_color='#ccccdd', left_w=36))
+                col_lay.addSpacing(8)
+            col_lay.addStretch(1)
+            cols_lay.addWidget(col, 1)
+        self._outer.addWidget(cols)
+        self._outer.addStretch(1)
 
 
 # ── Split views (3:7) ─────────────────────────────────────────────────────────
@@ -545,9 +534,10 @@ class _SeasonStatsView(QWidget):
     def __init__(self, wiz):
         super().__init__()
         self._wiz     = wiz
-        self._items   = {}
+        self._items   = {}       # key -> _SeasonItem (insertion-ordered)
         self._seasons = {}
-        self._current = None
+        self._focus_key  = None  # highlighted card (cursor)
+        self._opened_key = None  # season whose stats are shown
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
@@ -572,7 +562,6 @@ class _SeasonStatsView(QWidget):
             it.setParent(None)
         self._items.clear()
         self._seasons.clear()
-        self._current = None
 
         ordered = sorted(enumerate(seasons),
                          key=lambda kv: str(kv[1].get('year', kv[0])), reverse=True)
@@ -580,31 +569,48 @@ class _SeasonStatsView(QWidget):
             key = str(s.get('year', f'S{i:02d}'))
             champ = s.get('champion') or {}
             tc = _team_color(champ.get('team', ''), champ.get('manufacturer', ''))
-            item = _SeasonItem(key, s.get('year', key), champ.get('name', '—'), tc)
-            item.clicked.connect(self._on_select)
+            item = _SeasonItem(key, s.get('year', key), tc)
+            item.clicked.connect(self._open_key)
             self._list_lay.insertWidget(self._list_lay.count() - 1, item)
             self._items[key] = item
             self._seasons[key] = s
-        if ordered:
-            self._on_select(next(iter(self._items)))
+        self.reset_selection()
+
+    def reset_selection(self):
+        """Highlight the first card but leave the detail empty — a season only
+        reveals its stats once the user opens it with Enter (or a click)."""
+        self._opened_key = None
+        self._focus_key  = None
+        if self._items:
+            self._detail._placeholder('Select a season and press Enter')
+            self._set_focus(next(iter(self._items)))
         else:
             self._detail._placeholder('No seasons yet')
 
-    def _on_select(self, key: str):
-        if self._current and self._current in self._items:
-            self._items[self._current].set_selected(False)
-        self._current = key
-        self._items[key].set_selected(True)
-        self._detail.load(self._seasons[key])
+    def _set_focus(self, key: str):
+        for k, it in self._items.items():
+            it.set_selected(k == key)
+        self._focus_key = key
 
-    def move_selection(self, forward: bool):
-        keys = list(self._items.keys())
+    def move_focus(self, forward: bool):
+        keys = list(self._items)
         if not keys:
             return
-        idx = keys.index(self._current) if self._current in keys else -1
+        idx = keys.index(self._focus_key) if self._focus_key in keys else -1
         new = keys[(idx + (1 if forward else -1)) % len(keys)]
-        self._on_select(new)
+        self._set_focus(new)
         self._left_scroll.ensureWidgetVisible(self._items[new])
+
+    def open_focused(self):
+        if self._focus_key is not None:
+            self._open_key(self._focus_key)
+
+    def _open_key(self, key: str):
+        if key not in self._seasons:
+            return
+        self._set_focus(key)
+        self._opened_key = key
+        self._detail.load(self._seasons[key])
 
     def paintEvent(self, event):
         QPainter(self).fillRect(self.rect(), _TINT)
@@ -708,13 +714,18 @@ class HistoryPage(QWizardPage):
                 (self._open_riders if self._card_focus == 0 else self._open_seasons)()
                 return True
         elif idx in (1, 2):
-            if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-                view = self._riders_view if idx == 1 else self._seasons_view
-                view.move_selection(key == Qt.Key.Key_Down)
-                return True
             if key in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace):
                 self._stack.setCurrentIndex(0)
                 return True
+            if idx == 1:                       # Riders: navigate selects live
+                if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                    self._riders_view.move_selection(key == Qt.Key.Key_Down)
+                return True
+            # idx == 2 — Season Stats: navigate only highlights; Enter opens.
+            if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                self._seasons_view.move_focus(key == Qt.Key.Key_Down)
+            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+                self._seasons_view.open_focused()
             return True  # consume all other keys in the split views
         return False
 
@@ -722,6 +733,9 @@ class HistoryPage(QWizardPage):
         self._stack.setCurrentIndex(1)
 
     def _open_seasons(self):
+        # Enter the split view with an empty detail — the user picks a season
+        # and presses Enter to reveal its stats.
+        self._seasons_view.reset_selection()
         self._stack.setCurrentIndex(2)
 
     # ── Background painting (mirrors GalleryPage) ─────────────────────────────

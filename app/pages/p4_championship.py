@@ -487,6 +487,63 @@ class ChampionshipPage(QWizardPage):
 
     # ── Data ─────────────────────────────────────────────────────────────────
 
+    def _season_results(self):
+        """Per-race classifications feeding the current standings.
+
+        Parallels `all_pts` in `_compute`: banked rounds plus the current
+        (not-yet-banked) one for a championship, or just this session's races
+        otherwise. Each DataFrame carries name/pos/dnf.
+        """
+        wiz = self._wiz
+        if wiz.mode == 'championship':
+            banked = [df for rd in wiz.round_results for df in rd['races']]
+            return banked + wiz.race_results
+        return wiz.race_results
+
+    def _tiebreak_counts(self, results):
+        """Countback vectors keyed by rider, team and manufacturer.
+
+        Each vector is (n_P1, …, n_P24): how many finishes at each position,
+        mirroring how points are earned — a rider counts their own results, a
+        team counts both its riders', a manufacturer counts its best bike per
+        race. DNFs and finishes past P24 don't count.
+        """
+        roster = {str(r['name']): (str(r['team']), str(r['manufacturer']))
+                  for _, r in self._wiz.df.iterrows()}
+        rider, team, manu = {}, {}, {}
+        for df in results:
+            if df is None or df.empty:
+                continue
+            best_manu = {}
+            for _, r in df.iterrows():
+                if bool(r.get('dnf', False)):
+                    continue
+                pos = int(r['pos'])
+                if not (1 <= pos <= 24):
+                    continue
+                name = str(r['name'])
+                t, m = roster.get(name, ('', ''))
+                rider.setdefault(name, [0] * 24)[pos - 1] += 1
+                team.setdefault(t, [0] * 24)[pos - 1] += 1
+                if m and (m not in best_manu or pos < best_manu[m]):
+                    best_manu[m] = pos
+            for m, pos in best_manu.items():
+                manu.setdefault(m, [0] * 24)[pos - 1] += 1
+        as_tuples = lambda d: {k: tuple(v) for k, v in d.items()}
+        return as_tuples(rider), as_tuples(team), as_tuples(manu)
+
+    @staticmethod
+    def _rank(totals, countback, key_col):
+        """Order a points-summed table by points, then countback (both desc)."""
+        zero = (0,) * 24
+        order = sorted(
+            totals.index,
+            key=lambda i: (int(totals.at[i, 'points']),)
+            + countback.get(str(totals.at[i, key_col]), zero),
+            reverse=True,
+        )
+        return totals.loc[order].reset_index(drop=True)
+
     def _compute(self):
         wiz = self._wiz
 
@@ -501,19 +558,21 @@ class ChampionshipPage(QWizardPage):
 
         combined = pd.concat(all_pts, ignore_index=True)
 
-        self._rider_total = (
-            combined.groupby(['name', 'bike_number', 'team', 'manufacturer'], as_index=False)['points']
-            .sum().sort_values('points', ascending=False).reset_index(drop=True)
-        )
-        self._team_total = (
-            combined.groupby('team', as_index=False)['points']
-            .sum().sort_values('points', ascending=False).reset_index(drop=True)
-        )
+        # Countback tie-breakers: riders/teams/manufacturers level on points are
+        # split by number of wins, then 2nds, then 3rds … down to P24.
+        rider_cb, team_cb, manu_cb = self._tiebreak_counts(self._season_results())
+
+        self._rider_total = self._rank(
+            combined.groupby(['name', 'bike_number', 'team', 'manufacturer'],
+                             as_index=False)['points'].sum(),
+            rider_cb, 'name')
+        self._team_total = self._rank(
+            combined.groupby('team', as_index=False)['points'].sum(),
+            team_cb, 'team')
         manu_per_race = [r.groupby('manufacturer', as_index=False)['points'].max() for r in all_pts]
-        self._manu_total = (
-            pd.concat(manu_per_race).groupby('manufacturer', as_index=False)['points']
-            .sum().sort_values('points', ascending=False).reset_index(drop=True)
-        )
+        self._manu_total = self._rank(
+            pd.concat(manu_per_race).groupby('manufacturer', as_index=False)['points'].sum(),
+            manu_cb, 'manufacturer')
 
         fill_table(self._t_riders, [
             [i + 1, f"#{r['bike_number']}", r['name'], r['team'], r['manufacturer'], r['points']]

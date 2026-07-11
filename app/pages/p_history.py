@@ -580,15 +580,51 @@ def _season_tables_data(season: dict):
         for m, p in md.items():
             manu_total[m] = manu_total.get(m, 0) + p
 
+    # Countback tie-breakers, matching the live Standings page: ties on points
+    # are split by wins, then 2nds, then 3rds … down to P24.
+    rider_cb, team_cb, manu_cb = _pos_countback(race_maps, names)
+    zero = (0,) * 24
+
     return {
         'codes': codes, 'countries': countries, 'col_round': col_round, 'race_maps': race_maps,
         'names': names, 'rider_total': rider_total,
-        'riders_sorted': sorted(names, key=lambda n: -rider_total[n]),
+        'riders_sorted': sorted(names, key=lambda n: (rider_total[n],) + rider_cb.get(n, zero),
+                                reverse=True),
         'team_race': team_race, 'team_total': team_total,
-        'teams_sorted': sorted(team_total, key=lambda t: -team_total[t]),
+        'teams_sorted': sorted(team_total, key=lambda t: (team_total[t],) + team_cb.get(t, zero),
+                               reverse=True),
         'manu_race': manu_race, 'manu_total': manu_total,
-        'manu_sorted': sorted(manu_total, key=lambda m: -manu_total[m]),
+        'manu_sorted': sorted(manu_total, key=lambda m: (manu_total[m],) + manu_cb.get(m, zero),
+                              reverse=True),
     }
+
+
+def _pos_countback(race_maps, names):
+    """(n_P1, …, n_P24) finish-position vectors per rider / team / manufacturer.
+
+    Mirrors how points are earned — a rider counts their own results, a team
+    both its riders', a manufacturer its best bike per race. DNFs and finishes
+    past P24 don't count. Used to break ties on equal points.
+    """
+    rider = {nm: [0] * 24 for nm in names}
+    team, manu = {}, {}
+    for rm in race_maps:
+        best_manu = {}
+        for r in rm.values():
+            if r.get('dnf'):
+                continue
+            pos = int(r.get('pos', 0))
+            if not (1 <= pos <= 24):
+                continue
+            rider[r['name']][pos - 1] += 1
+            team.setdefault(r['team'], [0] * 24)[pos - 1] += 1
+            m = r['manufacturer']
+            if pos < best_manu.get(m, 999):
+                best_manu[m] = pos
+        for m, pos in best_manu.items():
+            manu.setdefault(m, [0] * 24)[pos - 1] += 1
+    as_tuples = lambda d: {k: tuple(v) for k, v in d.items()}
+    return as_tuples(rider), as_tuples(team), as_tuples(manu)
 
 
 def _race_label(codes, col_round, c) -> str:

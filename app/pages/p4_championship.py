@@ -11,6 +11,7 @@ from app.widgets.table_utils import (make_table, fill_table, row_bg,
                                       TEAM_COLOR, _DEFAULT_COLOR, GRID_ROLE)
 from app.pages.p_calendar import _ISO2
 from app.wizard import HISTORY_FILE as _HISTORY
+from src.simulator import POINTS
 
 _FLAGS = Path(__file__).parent.parent.parent / 'data' / 'flags'
 
@@ -288,11 +289,18 @@ class ChampionshipPage(QWizardPage):
             sel = _TAB_SEL_ELSEWHERE
         else:
             sel = _TAB_SEL_BROWSE
-        self._tabs.setStyleSheet(_TABS_BASE_SS + f'QTabBar::tab:selected {{ {sel} }}')
+        # Re-applying the QTabWidget stylesheet re-polishes every table inside it
+        # (~40ms). Only do it when the selection style actually changes.
+        ss = _TABS_BASE_SS + f'QTabBar::tab:selected {{ {sel} }}'
+        if ss != getattr(self, '_last_tabs_ss', None):
+            self._tabs.setStyleSheet(ss)
+            self._last_tabs_ss = ss
         for slot, btn in enumerate(self._nav_buttons()):
             focused = (not self._in_content
                        and self._browse_focus == self._tabs.count() + slot)
-            btn.setStyleSheet(_BTN_FOCUS_SS if focused else _BTN_IDLE_SS)
+            want = _BTN_FOCUS_SS if focused else _BTN_IDLE_SS
+            if btn.styleSheet() != want:
+                btn.setStyleSheet(want)
 
     def nextId(self):
         # The championship loop (Standings -> Practice) is driven by
@@ -432,13 +440,39 @@ class ChampionshipPage(QWizardPage):
                       'manufacturer': str(r['manufacturer']), 'points': int(r['points'])}
                      for _, r in self._rider_total.iterrows()]
 
+        # Per-round, per-race classifications — everything the History page needs
+        # to rebuild the results matrix and the race-by-race stats.
+        roster = {str(r['name']): (int(r['bike_number']), str(r['team']),
+                                   str(r['manufacturer']))
+                  for _, r in wiz.df.iterrows()}
+        rounds_detail = []
+        for rd in rounds:
+            races_out = []
+            for df in rd['races']:
+                race = []
+                for _, r in df.iterrows():
+                    name = str(r['name'])
+                    bn, team, manu = roster.get(name, (0, '', ''))
+                    pos, dnf = int(r['pos']), bool(r['dnf'])
+                    race.append({
+                        'name': name, 'team': team, 'manufacturer': manu,
+                        'bike_number': bn, 'pos': pos, 'dnf': dnf,
+                        'fastest_lap': bool(r.get('fastest_lap', False)),
+                        'pole': int(r.get('grid_pos', 0)) == 1,
+                        'points': 0 if dnf else int(POINTS.get(pos, 0)),
+                    })
+                races_out.append(race)
+            rounds_detail.append({'circuit': str(rd['circuit']),
+                                  'country': str(rd['country']), 'races': races_out})
+
         entry = {
-            'year':      wiz.season_year,
-            'rounds':    len(rounds),
-            'calendar':  [str(rd['circuit']) for rd in rounds],
-            'champion':  standings[0] if standings else None,
-            'standings': standings,
-            'stats':     stats,
+            'year':          wiz.season_year,
+            'rounds':        len(rounds),
+            'calendar':      [str(rd['circuit']) for rd in rounds],
+            'champion':      standings[0] if standings else None,
+            'standings':     standings,
+            'stats':         stats,
+            'rounds_detail': rounds_detail,
         }
 
         data = {'seasons': []}

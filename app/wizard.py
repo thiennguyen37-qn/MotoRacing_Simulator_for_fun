@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from PyQt6.QtWidgets import QWizard, QApplication, QDialog, QWidget
 from PyQt6.QtGui import QPainter, QColor
@@ -253,11 +254,54 @@ class MotoWizard(QWizard):
                     return True
         return False
 
+    def _bring_to_front(self):
+        """Force the borderless-fullscreen window above the current foreground
+        app. A plain raise_()/activateWindow() from a background process is
+        reduced by Windows' foreground lock to a taskbar flash, so on Windows
+        attach to the foreground thread's input queue to bypass it."""
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                from ctypes import wintypes
+                u = ctypes.windll.user32
+                u.GetForegroundWindow.restype = wintypes.HWND
+                u.GetWindowThreadProcessId.restype = wintypes.DWORD
+                u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, wintypes.LPDWORD]
+                u.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+                u.SetForegroundWindow.argtypes = [wintypes.HWND]
+                u.BringWindowToTop.argtypes = [wintypes.HWND]
+                hwnd     = wintypes.HWND(int(self.winId()))
+                fg       = u.GetForegroundWindow()
+                own_tid  = u.GetWindowThreadProcessId(hwnd, None)
+                fg_tid   = u.GetWindowThreadProcessId(fg, None) if fg else 0
+                if fg_tid and fg_tid != own_tid:
+                    u.AttachThreadInput(fg_tid, own_tid, True)
+                    u.BringWindowToTop(hwnd)
+                    u.SetForegroundWindow(hwnd)
+                    u.AttachThreadInput(fg_tid, own_tid, False)
+                else:
+                    u.BringWindowToTop(hwnd)
+                    u.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+        QApplication.processEvents()   # let the window paint before the dialog
+
     def closeEvent(self, event):
         # NOTE: no auto-save here. Every field the season save captures only
         # changes at round boundaries, where an explicit save already fires
         # (season start, round advance, the Home button). Saving on exit used
         # to clobber the pending-next-season marker with stale wizard state.
+
+        # Bring the borderless-fullscreen window to the front first. Closing
+        # from the taskbar while another app (e.g. VS Code) is focused would
+        # otherwise pop the confirmation over that app, with the simulator still
+        # hidden behind it.
+        self._bring_to_front()
+
         from app.pages.p_home import ExitDialog
         if ExitDialog(self).exec() == QDialog.DialogCode.Accepted:
             event.accept()

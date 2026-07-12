@@ -89,6 +89,7 @@ class MotoWizard(QWizard):
 
         self._audio_started = False
         self._built = False
+        self._windowed = False   # True once dropped out of borderless-fullscreen
 
     # ── Page build (drives the loading bar) ────────────────────────────────────
 
@@ -228,6 +229,13 @@ class MotoWizard(QWizard):
                 self._audio.toggle_mute()
                 return True
 
+            # Windows/Meta key: drop borderless-fullscreen down to a decorated,
+            # near-full window (with the _ ▢ X controls) so the taskbar and
+            # window buttons are reachable; press again to go back.
+            if k in (Qt.Key.Key_Meta, Qt.Key.Key_Super_L, Qt.Key.Key_Super_R):
+                self._toggle_window_chrome()
+                return True
+
             if hasattr(page, 'handle_key') and page.handle_key(k):
                 if k in (Qt.Key.Key_Up, Qt.Key.Key_Down,
                          Qt.Key.Key_Left, Qt.Key.Key_Right):
@@ -253,6 +261,43 @@ class MotoWizard(QWizard):
                     self.back()
                     return True
         return False
+
+    # ── Borderless-fullscreen ⇄ decorated window ───────────────────────────────
+
+    def _toggle_window_chrome(self):
+        if self._windowed:
+            self._enter_fullscreen()
+        else:
+            self._enter_windowed()
+
+    def _enter_windowed(self):
+        """Leave borderless-fullscreen for a normal titled window, sized just
+        inside the work area (taskbar visible) and centred, with the standard
+        minimise / maximise / close buttons."""
+        self._windowed = True
+        self.setWindowFlags(
+            Qt.WindowType.Window |
+            Qt.WindowType.WindowTitleHint |
+            Qt.WindowType.WindowSystemMenuHint |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint |
+            Qt.WindowType.WindowCloseButtonHint
+        )
+        avail = QApplication.primaryScreen().availableGeometry()
+        mw, mh = int(avail.width() * 0.04), int(avail.height() * 0.05)
+        rect = avail.adjusted(mw, mh, -mw, -mh)
+        self.showNormal()
+        self.setGeometry(rect)
+        self.show()            # re-show is required after changing window flags
+        self._bring_to_front()
+
+    def _enter_fullscreen(self):
+        """Back to the borderless window that covers the whole screen."""
+        self._windowed = False
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self.setGeometry(QApplication.primaryScreen().geometry())
+        self.show()
+        self._bring_to_front()
 
     def _bring_to_front(self):
         """Force the borderless-fullscreen window above the current foreground

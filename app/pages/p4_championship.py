@@ -3,7 +3,7 @@ import pandas as pd
 from pathlib import Path
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
                               QPushButton, QLabel, QTabWidget, QTableWidgetItem,
-                              QHeaderView)
+                              QHeaderView, QDialog)
 from PyQt6.QtGui import QFont, QColor, QBrush, QIcon
 from PyQt6.QtCore import Qt, QSize
 
@@ -135,24 +135,16 @@ class ChampionshipPage(QWizardPage):
         self._btn_next.clicked.connect(self._on_next_clicked)
         # second action, shown only once the season is over: finish -> home
         # (while _btn_next becomes "Next Season" -> back to the calendar)
-        self._btn_finish = QPushButton('🏆  Finish Championship')
+        self._btn_finish = QPushButton('Finish Championship')
         self._btn_finish.setFixedHeight(34)
         self._btn_finish.setAutoDefault(False)
         self._btn_finish.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_finish.clicked.connect(self._finish_clicked)
         self._btn_finish.setVisible(False)
-        # save & exit: banks the round (or archives the season) and goes home
-        self._btn_home = QPushButton('⌂  Home')
-        self._btn_home.setFixedHeight(34)
-        self._btn_home.setAutoDefault(False)
-        self._btn_home.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._btn_home.clicked.connect(self._home_clicked)
-        self._btn_home.setVisible(False)
         self._info_lbl = QLabel('')
         self._info_lbl.setFont(QFont('Segoe UI', 10))
         ctrl.addWidget(self._btn_next)
         ctrl.addWidget(self._btn_finish)
-        ctrl.addWidget(self._btn_home)
         ctrl.addWidget(self._info_lbl, 1)
         layout.addLayout(ctrl)
 
@@ -208,13 +200,11 @@ class ChampionshipPage(QWizardPage):
             else:
                 self._btn_next.setText('▶  Next Season')
                 self._btn_finish.setVisible(True)
-            self._btn_home.setVisible(True)
         else:
             self.setSubTitle(f"Overall standings after 2 races at {wiz.circuit['circuit_name']}.")
             self._info_lbl.setText('')
             self._btn_next.setText('🏁  Finish')
             self._btn_finish.setVisible(False)
-            self._btn_home.setVisible(False)
 
         # per-round results only make sense across a season
         self._tabs.setTabVisible(3, wiz.mode == 'championship')
@@ -272,10 +262,13 @@ class ChampionshipPage(QWizardPage):
                 self._in_content = True
                 self._update_nav_styles()
             return True
-        return False    # Esc/Backspace fall through -> wizard.back()
+        if key in (K.Key_Escape, K.Key_Backspace) and self._wiz.mode == 'championship':
+            self._confirm_home()      # save & exit to Home (with a confirm)
+            return True
+        return False    # random mode: Esc/Backspace fall through -> wizard.back()
 
     def _nav_buttons(self) -> list:
-        return [b for b in (self._btn_next, self._btn_finish, self._btn_home)
+        return [b for b in (self._btn_next, self._btn_finish)
                 if b.isVisibleTo(self)]
 
     def _n_buttons(self) -> int:
@@ -324,17 +317,22 @@ class ChampionshipPage(QWizardPage):
             self._wiz.accept()          # random race: finish -> home
 
     def _finish_clicked(self):
-        """End the career here: archive the season, nothing left to resume."""
+        """Archive the season and return home. The career carries on: a
+        next-season marker keeps Continue enabled, and entering it opens next
+        year's calendar setup."""
         self._save_history()
-        self._wiz.clear_season_save()
+        self._wiz.save_next_season_marker()
         self._wiz.accept()
 
-    def _home_clicked(self):
-        """Save & exit to the home page — the career is not lost.
-
-        Mid-season: banks the round just raced, so CONTINUE resumes at the
-        next one. Season over: archives it and leaves a marker so CONTINUE
-        opens next year's calendar."""
+    def _confirm_home(self):
+        """Esc on the standings: confirm, then save & return to Home so no
+        progress is lost. Mid-season banks the round just raced (CONTINUE
+        resumes at the next one); a finished season is archived with a marker
+        so CONTINUE opens next year's calendar."""
+        from app.pages.p_home import ExitDialog
+        dlg = ExitDialog(self._wiz, message='Return to Home?', confirm_text='Yes')
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
         wiz = self._wiz
         if self._has_next_round():
             self._bank_round()

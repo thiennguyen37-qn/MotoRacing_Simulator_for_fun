@@ -50,7 +50,8 @@ def _load_logo(key: str) -> QPixmap | None:
 # ── Exit confirmation dialog ──────────────────────────────────────────────────
 
 class ExitDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, message='Do you want to exit?',
+                 confirm_text='Yes, Exit'):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -71,7 +72,7 @@ class ExitDialog(QDialog):
         cl.setContentsMargins(32, 28, 32, 24)
         cl.setSpacing(20)
 
-        msg = QLabel('Do you want to exit?')
+        msg = QLabel(message)
         msg.setFont(QFont('Segoe UI', 14, QFont.Weight.Bold))
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cl.addWidget(msg)
@@ -86,7 +87,7 @@ class ExitDialog(QDialog):
         self._btn_cancel.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_cancel.clicked.connect(self.reject)
 
-        self._btn_yes = QPushButton('Yes, Exit')
+        self._btn_yes = QPushButton(confirm_text)
         self._btn_yes.setFixedHeight(38)
         self._btn_yes.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
         self._btn_yes.setAutoDefault(False)

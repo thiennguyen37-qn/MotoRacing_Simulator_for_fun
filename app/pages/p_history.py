@@ -788,6 +788,131 @@ def _build_race_by_race(data: dict):
     return scroll
 
 
+# ── Honours (win / podium / pole leaderboards) ─────────────────────────────────
+
+def _honours_data(data: dict) -> dict:
+    """Season honour boards. A rider's win = P1, podium = P1–P3 (both finishes,
+    not DNFs), pole = the pole flag. Manufacturer boards sum their riders'
+    tallies — mirroring how the app already attributes results to a make."""
+    names = data['names']
+    rider = {nm: {'wins': 0, 'podiums': 0, 'poles': 0} for nm in names}
+    for rm in data['race_maps']:
+        for r in rm.values():
+            if r.get('pole'):
+                rider[r['name']]['poles'] += 1
+            if not r.get('dnf'):
+                pos = int(r.get('pos', 0))
+                if pos == 1:
+                    rider[r['name']]['wins'] += 1
+                if 1 <= pos <= 3:
+                    rider[r['name']]['podiums'] += 1
+
+    manu: dict[str, dict] = {}
+    for nm, tally in rider.items():
+        m = names[nm]['manufacturer']
+        md = manu.setdefault(m, {'wins': 0, 'podiums': 0, 'poles': 0})
+        for k in md:
+            md[k] += tally[k]
+
+    def board(src: dict, key: str) -> list:
+        # Only entries with a count; ties broken alphabetically.
+        rows = [(n, v[key]) for n, v in src.items() if v[key] > 0]
+        return sorted(rows, key=lambda x: (-x[1], x[0]))
+
+    keys = ('wins', 'podiums', 'poles')
+    return {
+        'riders': {k: board(rider, k) for k in keys},
+        'manu':   {k: board(manu, k) for k in keys},
+    }
+
+
+_HON_RULE = 'rgba(255, 255, 255, 90)'   # soft white rule, easy to see on the dark veil
+
+
+def _hdivider() -> QFrame:
+    """A thin horizontal white rule (title ↔ list separator)."""
+    d = QFrame(); d.setFixedHeight(1)
+    d.setStyleSheet(f'background: {_HON_RULE}; border: none;')
+    return d
+
+
+def _vdivider() -> QFrame:
+    """A thin vertical white rule that stretches to the column height."""
+    d = QFrame(); d.setFixedWidth(1)
+    d.setStyleSheet(f'background: {_HON_RULE}; border: none;')
+    d.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+    return d
+
+
+def _honour_row(name: str, value: str, name_color: str = '#ffffff') -> QWidget:
+    """One leaderboard line: name on the left, count on the right (no rank)."""
+    w = QWidget(); w.setStyleSheet('background: transparent;')
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(10)
+    nm = QLabel(name)
+    nm.setFont(QFont('Segoe UI', 13, QFont.Weight.Bold))
+    nm.setStyleSheet(f'color: {name_color}; background: transparent; border: none;')
+    lay.addWidget(nm, 1)
+    val = QLabel(value)
+    val.setFont(QFont('Segoe UI', 13, QFont.Weight.Bold))
+    val.setStyleSheet('color: #ffffff; background: transparent; border: none;')
+    lay.addWidget(val)
+    return w
+
+
+def _honours_column(title: str, entries: list) -> QWidget:
+    """A single ranked leaderboard: centred title over name / count rows."""
+    col = QWidget(); col.setStyleSheet('background: transparent;')
+    lay = QVBoxLayout(col)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+    head = _section_label(title)
+    head.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
+    head.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+    lay.addWidget(head)
+    lay.addSpacing(12)
+    lay.addWidget(_hdivider())         # rule between the title and the list
+    lay.addSpacing(14)
+    if not entries:
+        ph = QLabel('—')
+        ph.setFont(QFont('Segoe UI', 13))
+        ph.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        ph.setStyleSheet('color: #44445a; background: transparent; border: none;')
+        lay.addWidget(ph)
+    else:
+        for name, count in entries:
+            lay.addWidget(_honour_row(name.upper(), str(count)))
+            lay.addSpacing(10)
+    lay.addStretch(1)
+    return col
+
+
+def _build_honours(board: dict):
+    """Three side-by-side leaderboards (Race Wins / Podiums / Poles) for one
+    category (riders or manufacturers)."""
+    scroll = _make_scroll_area()
+    cont = QWidget(); cont.setStyleSheet('background: transparent;')
+    lay = QVBoxLayout(cont)
+    lay.setContentsMargins(0, 0, 12, 0)
+    lay.setSpacing(0)
+
+    cols = QWidget(); cols.setStyleSheet('background: transparent;')
+    cl = QHBoxLayout(cols)
+    cl.setContentsMargins(0, 0, 0, 0)
+    cl.setSpacing(36)
+    cl.addWidget(_honours_column('RACE WINS', board['wins']), 1)
+    cl.addWidget(_vdivider())
+    cl.addWidget(_honours_column('PODIUMS', board['podiums']), 1)
+    cl.addWidget(_vdivider())
+    cl.addWidget(_honours_column('POLES', board['poles']), 1)
+    lay.addWidget(cols)
+    lay.addStretch(1)
+
+    scroll.setWidget(cont)
+    return scroll
+
+
 class _GPBox(QFrame):
     """A square Grand-Prix tile: the country flag over 'Grand Prix of <country>'."""
 
@@ -911,8 +1036,9 @@ def _build_gp_detail(season: dict, round_idx: int):
 
 
 class _SeasonStatDetail(QWidget):
-    SUBCARDS   = ['FINAL STANDINGS', 'RACE BY RACE']
-    CATEGORIES = ['RIDERS', 'TEAMS', 'MANUFACTURERS']
+    SUBCARDS       = ['FINAL STANDINGS', 'RACE BY RACE', 'HONOURS']
+    CATEGORIES     = ['RIDERS', 'TEAMS', 'MANUFACTURERS']
+    HON_CATEGORIES = ['RIDERS', 'MANUFACTURERS']
     _GP_COLS   = 5
 
     def __init__(self):
@@ -925,9 +1051,10 @@ class _SeasonStatDetail(QWidget):
         self._outer.setSpacing(0)
         self._season = None
         self._data = None
-        self._view = 'select'      # 'select' | 'fs' | 'rbr' | 'gp'
-        self._focus = 0            # highlighted sub-card: 0 = Final Standings, 1 = Race by Race
+        self._view = 'select'      # 'select' | 'fs' | 'rbr' | 'gp' | 'hon'
+        self._focus = 0            # highlighted sub-card: 0 = Final Standings, 1 = Race by Race, 2 = Honours
         self._category = 0         # Riders/Teams/Manu within Final Standings
+        self._hon_category = 0     # Riders/Manufacturers within Honours
         self._gp_focus = 0         # highlighted Grand-Prix box
         self._gp_boxes = []
         self._gp_rows = []
@@ -958,6 +1085,7 @@ class _SeasonStatDetail(QWidget):
         self._view     = 'select'
         self._focus    = 0
         self._category = 0
+        self._hon_category = 0
         self._gp_focus = 0
         self._matrices = {}
         self._gp_boxes = []
@@ -1010,6 +1138,20 @@ class _SeasonStatDetail(QWidget):
         self._gp_lay = QVBoxLayout(self._p_gp)
         self._gp_lay.setContentsMargins(0, 0, 0, 0); self._gp_lay.setSpacing(0)
         self._cstack.addWidget(self._p_gp)
+
+        # Honours: category tab bar (Riders/Manufacturers) + win/podium/pole boards.
+        honours = _honours_data(self._data)
+        self._p_hon = QWidget(); self._p_hon.setStyleSheet('background: transparent;')
+        honl = QVBoxLayout(self._p_hon); honl.setContentsMargins(0, 0, 0, 0); honl.setSpacing(0)
+        self._hon_cat_holder = QWidget(); self._hon_cat_holder.setStyleSheet('background: transparent;')
+        self._hon_cat_lay = QVBoxLayout(self._hon_cat_holder)
+        self._hon_cat_lay.setContentsMargins(0, 0, 0, 0); self._hon_cat_lay.setSpacing(0)
+        honl.addWidget(self._hon_cat_holder); honl.addSpacing(12)
+        self._hon_stack = QStackedWidget(); self._hon_stack.setStyleSheet('background: transparent;')
+        self._hon_stack.addWidget(_build_honours(honours['riders']))
+        self._hon_stack.addWidget(_build_honours(honours['manu']))
+        honl.addWidget(self._hon_stack, 1)
+        self._cstack.addWidget(self._p_hon)
 
         self._outer.addWidget(self._cstack, 1)
         self._refresh()
@@ -1091,6 +1233,17 @@ class _SeasonStatDetail(QWidget):
                 b.set_selected(i == self._gp_focus)
             self._cstack.setCurrentWidget(self._p_rbr)
             self._scrollable = None
+        elif self._view == 'hon':
+            while self._hon_cat_lay.count():
+                it = self._hon_cat_lay.takeAt(0); w = it.widget()
+                if w is not None:
+                    w.setParent(None)
+            self._hon_cat_lay.addWidget(
+                _tab_bar(self.HON_CATEGORIES, self._hon_category, accent='#318CE7'))
+            pg = self._hon_stack.widget(self._hon_category)
+            self._hon_stack.setCurrentWidget(pg)
+            self._cstack.setCurrentWidget(self._p_hon)
+            self._scrollable = pg
         elif self._view == 'gp':
             self._cstack.setCurrentWidget(self._p_gp)
 
@@ -1119,10 +1272,10 @@ class _SeasonStatDetail(QWidget):
         v = self._view
         if v == 'select':
             if key in (K.Key_Left, K.Key_Right):
-                self._focus = (self._focus + (1 if key == K.Key_Right else -1)) % 2
+                self._focus = (self._focus + (1 if key == K.Key_Right else -1)) % 3
                 self._refresh()
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
-                self._view = 'fs' if self._focus == 0 else 'rbr'
+                self._view = ('fs', 'rbr', 'hon')[self._focus]
                 self._gp_focus = 0
                 self._refresh()
             elif key in (K.Key_Escape, K.Key_Backspace):
@@ -1151,6 +1304,19 @@ class _SeasonStatDetail(QWidget):
                 self._scroll(-60 if key == K.Key_Up else 60)
             elif key in (K.Key_Escape, K.Key_Backspace):
                 self._view = 'rbr'
+                self._refresh()
+        elif v == 'hon':
+            if key in (K.Key_Left, K.Key_Right):    # switch Riders / Manufacturers
+                self._hon_category = (self._hon_category +
+                                      (1 if key == K.Key_Right else -1)) % 2
+                self._refresh()
+            elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+                self._hon_category = (self._hon_category + 1) % 2
+                self._refresh()
+            elif key in (K.Key_Up, K.Key_Down):
+                self._scroll(-60 if key == K.Key_Up else 60)
+            elif key in (K.Key_Escape, K.Key_Backspace):
+                self._view = 'select'
                 self._refresh()
         return None
 

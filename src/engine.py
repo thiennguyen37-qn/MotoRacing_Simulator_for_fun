@@ -11,10 +11,12 @@ FORM_STD        = 0.060   # per-race form swing (score units), before consistenc
 TRAFFIC_K       = 0.10    # seconds lost per grid slot behind, on the opening lap
 TRAFFIC_LAPS    = 5       # laps over which the grid/traffic penalty fades to zero
 RACE_TIME_PEN_MAX = 1.0   # seconds/lap penalty for worst-vs-best score (race only; Practice/Quali keep MAX_DELTA)
-TYRE_DEG_MAX    = 0.8     # seconds lost per lap to tyre wear, worst tyre_management at full distance
-WET_PEN_MAX     = 2.5     # seconds lost per lap in the wet, worst wet_performance
+TYRE_DEG_MAX    = 0.8     # seconds lost per lap to tyre wear, worst tyre_management at full distance (dry only; wet tyre wear isn't modelled)
+WET_PEN_BASE    = 1.0     # flat seconds/lap penalty applied to everyone when it's wet, so a wet lap always runs slower than the dry base lap
+WET_PEN_SKILL_MAX = 1.0   # extra seconds/lap penalty for worst-vs-best wet_performance, on top of the flat penalty
 CRASH_PROB_BASE = 0.0055  # per-lap DNF chance floor (calmest/steadiest riders)
 CRASH_PROB_K    = 0.004   # extra per-lap DNF chance scaling with aggression x (1 - consistency)
+CRASH_PROB_WET_MULT = 2.0 # multiplier applied to crash_prob when the race is wet
 
 
 # ── Shared utilities ──────────────────────────────────────────────────────────
@@ -145,16 +147,19 @@ def simulate_race_lap(row, lap_num, total_laps, score, is_wet, base_time, grid_p
     """Return a race lap time in seconds; returns None on crash (DNF)."""
     if lap_num > 1:
         crash_prob = CRASH_PROB_BASE + CRASH_PROB_K * norm(row['aggression']) * (1 - norm(row['consistency']))
+        if is_wet:
+            crash_prob *= CRASH_PROB_WET_MULT
         if np.random.random() < crash_prob:
             return None
     time_pen  = (1 - score) * RACE_TIME_PEN_MAX
-    tyre_deg  = TYRE_DEG_MAX * (1 - norm(row['tyre_management'])) * (lap_num / total_laps) ** 1.5
+    # Tyre wear isn't modelled in the wet (rain tyres, not the dry-tyre degradation curve).
+    tyre_deg  = 0.0 if is_wet else TYRE_DEG_MAX * (1 - norm(row['tyre_management'])) * (lap_num / total_laps) ** 1.5
     fuel_gain = 0.4 * (lap_num - 1) / max(total_laps - 1, 1)
     start_pen = {1: 4.0, 2: 1.5}.get(lap_num, 0.0)
     # Track position: starting further back means fighting through traffic for
     # the opening laps; the cost fades linearly to zero over TRAFFIC_LAPS.
     traffic   = max(0.0, (TRAFFIC_LAPS - (lap_num - 1)) / TRAFFIC_LAPS) * TRAFFIC_K * (grid_pos - 1)
-    wet_pen   = WET_PEN_MAX * (1 - norm(row['wet_performance'])) if is_wet else 0.0
+    wet_pen   = (WET_PEN_BASE + WET_PEN_SKILL_MAX * (1 - norm(row['wet_performance']))) if is_wet else 0.0
     var_mult  = 2.0 if lap_num <= 2 else 1.0
     variance  = var_mult * 0.5 * (1 - norm(row['consistency'])) * (1 - norm(row['stability']))
     noise     = np.random.uniform(-variance, variance)

@@ -13,6 +13,8 @@ TRAFFIC_LAPS    = 5       # laps over which the grid/traffic penalty fades to ze
 RACE_TIME_PEN_MAX = 1.0   # seconds/lap penalty for worst-vs-best score (race only; Practice/Quali keep MAX_DELTA)
 TYRE_DEG_MAX    = 0.8     # seconds lost per lap to tyre wear, worst tyre_management at full distance
 WET_PEN_MAX     = 2.5     # seconds lost per lap in the wet, worst wet_performance
+CRASH_PROB_BASE = 0.0055  # per-lap DNF chance floor (calmest/steadiest riders)
+CRASH_PROB_K    = 0.004   # extra per-lap DNF chance scaling with aggression x (1 - consistency)
 
 
 # ── Shared utilities ──────────────────────────────────────────────────────────
@@ -142,7 +144,7 @@ def perf_score_race(row, w_spd, w_cor, w_brk):
 def simulate_race_lap(row, lap_num, total_laps, score, is_wet, base_time, grid_pos=1):
     """Return a race lap time in seconds; returns None on crash (DNF)."""
     if lap_num > 1:
-        crash_prob = 0.003 + 0.004 * norm(row['aggression']) * (1 - norm(row['consistency']))
+        crash_prob = CRASH_PROB_BASE + CRASH_PROB_K * norm(row['aggression']) * (1 - norm(row['consistency']))
         if np.random.random() < crash_prob:
             return None
     time_pen  = (1 - score) * RACE_TIME_PEN_MAX

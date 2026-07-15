@@ -16,6 +16,8 @@ from src.engine import (
 POINTS = {1: 25, 2: 20, 3: 16, 4: 13, 5: 11, 6: 10,
           7: 9, 8: 8, 9: 7, 10: 6, 11: 5, 12: 4, 13: 3, 14: 2, 15: 1}
 
+WET_RACE_PROB_PCT = 7.5  # chance (%) that a given race is run in wet conditions
+
 
 def run_practice(df, circuit, laps=15):
     """Returns DataFrame sorted by best lap. Index is 1-based position."""
@@ -113,7 +115,7 @@ def run_race(df, circuit, grid_all_df):
         for _, r in grid_df.iterrows()
     }
 
-    is_wet = np.random.uniform(0, 100) <= np.random.uniform(0, 5)
+    is_wet = np.random.uniform(0, 100) <= WET_RACE_PROB_PCT
 
     state = {}
     for _, r in grid_df.iterrows():

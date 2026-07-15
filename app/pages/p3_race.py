@@ -189,8 +189,13 @@ class RacePage(QWizardPage):
             self._btn_r2.setEnabled(False)
         self._status.setText(f'Running Race {race_num}…')
 
+        # forced_weather is a Random Race-only override (set by WeatherPage,
+        # which championship rounds never visit) — gate by mode so a stale
+        # value from an earlier Random Race can't leak into a championship.
+        forced_weather = self._wiz.forced_weather if self._wiz.mode == 'random' else None
         result_df, pts_df, meta = run_race(
-            self._wiz.df, self._wiz.circuit, self._wiz.grid_all_df
+            self._wiz.df, self._wiz.circuit, self._wiz.grid_all_df,
+            forced_weather=forced_weather
         )
         self._wiz.race_pts.append(pts_df)
         self._wiz.race_results.append(

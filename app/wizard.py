@@ -67,6 +67,11 @@ class MotoWizard(QWizard):
         self.circuit_index = 0
         self.all_race_pts  = []
 
+        # Random Race weather override — None (roll the dice), 'dry', or 'wet'.
+        # Set by WeatherPage (shown after Qualifying, random mode only);
+        # championship rounds never visit that page and always roll.
+        self.forced_weather = None
+
         # Championship season order (set by CalendarPage)
         self.season_df   = None
         self.season_year = START_YEAR   # +1 every "Next Season"
@@ -108,6 +113,7 @@ class MotoWizard(QWizard):
         from app.pages.p0_circuit      import CircuitPage
         from app.pages.p1_practice     import PracticePage
         from app.pages.p2_qualifying   import QualifyingPage
+        from app.pages.p_weather       import WeatherPage
         from app.pages.p3_race         import RacePage
         from app.pages.p4_championship import ChampionshipPage
         from app.pages.p_history       import HistoryPage
@@ -120,6 +126,7 @@ class MotoWizard(QWizard):
             ('ID_CIRCUIT',    'Circuits',     lambda: CircuitPage(self)),
             ('ID_PRACTICE',   'Practice',     lambda: PracticePage(self)),
             ('ID_QUALI',      'Qualifying',   lambda: QualifyingPage(self)),
+            ('ID_WEATHER',    'Weather',      lambda: WeatherPage(self)),
             ('ID_RACE',       'Race',         lambda: RacePage(self)),
             ('ID_STANDINGS',  'Standings',    lambda: ChampionshipPage(self)),
             ('ID_HISTORY',    'History',      lambda: HistoryPage(self)),

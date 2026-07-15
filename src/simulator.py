@@ -92,10 +92,11 @@ def run_qualifying(df, circuit, practice_results, push_laps=3):
     return q1_class, q2_class, q2_advance_names, q1_nq, grid_all
 
 
-def run_race(df, circuit, grid_all_df):
+def run_race(df, circuit, grid_all_df, forced_weather=None):
     """
     Returns (race_result_df, rider_pts_df, meta_dict).
     grid_all_df: from run_qualifying — must have name, bike_number, grid_pos, team, manufacturer.
+    forced_weather: None (roll the dice), 'dry', or 'wet' — overrides WET_RACE_PROB_PCT.
     """
     # Merge stat columns not already in grid_all_df
     skip = set(grid_all_df.columns) - {'name', 'bike_number'}
@@ -115,7 +116,10 @@ def run_race(df, circuit, grid_all_df):
         for _, r in grid_df.iterrows()
     }
 
-    is_wet = np.random.uniform(0, 100) <= WET_RACE_PROB_PCT
+    if forced_weather is None:
+        is_wet = np.random.uniform(0, 100) <= WET_RACE_PROB_PCT
+    else:
+        is_wet = forced_weather == 'wet'
 
     state = {}
     for _, r in grid_df.iterrows():

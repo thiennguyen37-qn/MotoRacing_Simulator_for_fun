@@ -155,3 +155,10 @@ class QualifyingPage(QWizardPage):
 
     def isComplete(self):
         return self._q2_done
+
+    def nextId(self):
+        # Weather selection is a Random Race extra — championship rounds
+        # skip straight to Race and keep rolling WET_RACE_PROB_PCT.
+        if self._wiz.mode == 'random':
+            return self._wiz.ID_WEATHER
+        return self._wiz.ID_RACE

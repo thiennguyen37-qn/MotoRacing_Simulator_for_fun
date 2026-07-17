@@ -16,7 +16,7 @@ from src.engine import (
 POINTS = {1: 25, 2: 20, 3: 16, 4: 13, 5: 11, 6: 10,
           7: 9, 8: 8, 9: 7, 10: 6, 11: 5, 12: 4, 13: 3, 14: 2, 15: 1}
 
-WET_RACE_PROB_PCT = 7.5  # chance (%) that a given race is run in wet conditions
+WET_RACE_PROB_PCT = 6.5  # chance (%) that a given race is run in wet conditions
 
 
 def run_practice(df, circuit, laps=15):

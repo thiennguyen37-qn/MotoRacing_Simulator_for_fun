@@ -16,7 +16,7 @@ WET_PEN_BASE    = 1.0     # flat seconds/lap penalty applied to everyone when it
 WET_PEN_SKILL_MAX = 1.0   # extra seconds/lap penalty for worst-vs-best wet_performance, on top of the flat penalty
 CRASH_PROB_BASE = 0.0055  # per-lap DNF chance floor (calmest/steadiest riders)
 CRASH_PROB_K    = 0.004   # extra per-lap DNF chance scaling with aggression x (1 - consistency)
-CRASH_PROB_WET_MULT = 2.0 # multiplier applied to crash_prob when the race is wet
+CRASH_PROB_WET_MULT = 2.3 # multiplier applied to crash_prob when the race is wet
 
 
 # ── Shared utilities ──────────────────────────────────────────────────────────

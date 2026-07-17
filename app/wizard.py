@@ -14,7 +14,12 @@ PROJECT_ROOT = Path(__file__).parent.parent
 RAW          = PROJECT_ROOT / 'data' / 'raw'
 SEASON_SAVE  = PROJECT_ROOT / 'data' / 'season_save.json'
 HISTORY_FILE = PROJECT_ROOT / 'data' / 'history.json'
+CAREER_DIR   = PROJECT_ROOT / 'data' / 'career'   # career/slot{0..9}/{rider,season_save,history}.json
+CAREER_SLOTS = 10
 START_YEAR   = 2026
+# Modes that run a multi-round season loop (calendar, save/resume, archive)
+# as opposed to a one-off session ('random') or a non-race page.
+SEASON_MODES = {'championship', 'career'}
 
 
 class _GapFiller(QWidget):
@@ -60,12 +65,21 @@ class MotoWizard(QWizard):
 
         # Data
         self.df          = load_riders(RAW)
+        self._base_rider_count = len(self.df)   # 24 base riders, before any Career rider is appended
         self.circuits_df = load_circuits(RAW)
 
         # Mode state
         self.mode          = None        # 'random' | 'championship' | 'gallery' | 'soundtrack'
         self.circuit_index = 0
         self.all_race_pts  = []
+
+        # Which of the CAREER_SLOTS (0-9) the current Career session reads/
+        # writes — set by CareerPage before any save/history/rider call.
+        self.career_slot = None
+        # Set by CareerPage right before a freshly-created rider hands off to
+        # CalendarPage, so it skips its New/Continue menu (there's obviously
+        # no season in progress for a rider that was just created).
+        self.skip_calendar_menu = False
 
         # Random Race weather override — None (roll the dice), 'dry', or 'wet'.
         # Set by WeatherPage (shown after Qualifying, random mode only);
@@ -117,6 +131,7 @@ class MotoWizard(QWizard):
         from app.pages.p3_race         import RacePage
         from app.pages.p4_championship import ChampionshipPage
         from app.pages.p_history       import HistoryPage
+        from app.pages.p_career        import CareerPage
         from app.pages.p_gallery       import GalleryPage
         from app.pages.p_soundtrack    import SoundtrackPage
 
@@ -130,6 +145,7 @@ class MotoWizard(QWizard):
             ('ID_RACE',       'Race',         lambda: RacePage(self)),
             ('ID_STANDINGS',  'Standings',    lambda: ChampionshipPage(self)),
             ('ID_HISTORY',    'History',      lambda: HistoryPage(self)),
+            ('ID_CAREER',     'Career',       lambda: CareerPage(self)),
             ('ID_GALLERY',    'Gallery',      lambda: GalleryPage(self)),
             ('ID_SOUNDTRACK', 'Soundtrack',   lambda: SoundtrackPage(self, self._audio)),
         ]
@@ -231,6 +247,23 @@ class MotoWizard(QWizard):
         if event.type() == QEvent.Type.KeyPress and self.isActiveWindow():
             page = self.currentPage()
             k = event.key()
+
+            if getattr(page, 'text_entry_active', False):
+                # A page-owned QLineEdit currently holds focus (e.g. Career's
+                # Name field) — only Enter/Escape are intercepted (to
+                # commit/cancel the edit); every other key passes straight
+                # through to Qt's normal focused-widget delivery so typing,
+                # backspace, and cursor movement behave like a normal
+                # QLineEdit instead of the app's D-pad handle_key() contract
+                # or any global shortcut (mute, window-chrome toggle, ...).
+                if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape):
+                    if hasattr(page, 'handle_key') and page.handle_key(k):
+                        if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                            self._audio.play_sfx('select')
+                        else:
+                            self._audio.play_sfx('back')
+                        return True
+                return False
 
             if k == Qt.Key.Key_M:
                 self._audio.toggle_mute()
@@ -362,12 +395,26 @@ class MotoWizard(QWizard):
 
     # ── Season save / resume ──────────────────────────────────────────────────
 
+    def career_slot_dir(self, slot=None):
+        """Directory for a career slot (default: the active self.career_slot),
+        created on first use."""
+        s = self.career_slot if slot is None else slot
+        d = CAREER_DIR / f'slot{s}'
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def season_save_path(self):
+        return self.career_slot_dir() / 'season_save.json' if self.mode == 'career' else SEASON_SAVE
+
+    def history_path(self):
+        return self.career_slot_dir() / 'history.json' if self.mode == 'career' else HISTORY_FILE
+
     def save_season(self):
-        """Snapshot the running championship (at round granularity) so the
-        player can continue after restarting the app. Called explicitly at
-        season start, on every round advance and by the Home button — never
-        blindly on exit (stale wizard state must not overwrite the file)."""
-        if self.mode != 'championship' or self.season_df is None:
+        """Snapshot the running season (at round granularity) so the player
+        can continue after restarting the app. Called explicitly at season
+        start, on every round advance and by the Home button — never blindly
+        on exit (stale wizard state must not overwrite the file)."""
+        if self.mode not in SEASON_MODES or self.season_df is None:
             return
         data = {
             'year':          self.season_year,
@@ -380,7 +427,7 @@ class MotoWizard(QWizard):
                  'races': [df.to_dict('records') for df in rd['races']]}
                 for rd in self.round_results],
         }
-        SEASON_SAVE.write_text(json.dumps(data, default=int), encoding='utf-8')
+        self.season_save_path().write_text(json.dumps(data, default=int), encoding='utf-8')
 
     def save_next_season_marker(self):
         """After a season ends, remember that the career continues: the next
@@ -389,26 +436,55 @@ class MotoWizard(QWizard):
         data = {'season_complete': True,
                 'year': self.season_year + 1,
                 'rounds': rounds}
-        SEASON_SAVE.write_text(json.dumps(data), encoding='utf-8')
+        self.season_save_path().write_text(json.dumps(data), encoding='utf-8')
 
-    @staticmethod
-    def load_season_save():
+    def load_season_save(self):
         """Return the saved-season dict, or None if absent/corrupt."""
-        if not SEASON_SAVE.exists():
+        path = self.season_save_path()
+        if not path.exists():
             return None
         try:
-            return json.loads(SEASON_SAVE.read_text(encoding='utf-8'))
+            return json.loads(path.read_text(encoding='utf-8'))
         except (json.JSONDecodeError, OSError):
             return None
 
-    @staticmethod
-    def clear_season_save():
-        SEASON_SAVE.unlink(missing_ok=True)
+    def clear_season_save(self):
+        self.season_save_path().unlink(missing_ok=True)
 
-    @staticmethod
-    def clear_history():
-        """Wipe the championship archive — a New career starts from scratch."""
-        HISTORY_FILE.unlink(missing_ok=True)
+    def clear_history(self):
+        """Wipe the season archive — a New career starts from scratch."""
+        self.history_path().unlink(missing_ok=True)
+
+    # ── Career rider profiles (10 slots) ──────────────────────────────────────
+
+    def save_career_rider(self, rider: dict, slot=None):
+        path = self.career_slot_dir(slot) / 'rider.json'
+        path.write_text(json.dumps(rider, default=int), encoding='utf-8')
+
+    def load_career_rider(self, slot=None):
+        """Return the saved custom-rider dict for a slot, or None if absent/corrupt."""
+        s = self.career_slot if slot is None else slot
+        if s is None:
+            return None
+        path = CAREER_DIR / f'slot{s}' / 'rider.json'
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def clear_career_rider(self, slot=None):
+        (self.career_slot_dir(slot) / 'rider.json').unlink(missing_ok=True)
+
+    def list_career_slots(self):
+        """Return CAREER_SLOTS entries: the saved rider dict for each slot,
+        or None for an empty one — feeds the New/Load slot picker."""
+        return [self.load_career_rider(slot=i) for i in range(CAREER_SLOTS)]
+
+    def reset_roster_to_base(self):
+        """Drop any previously-appended Career rider, back to the 24 base riders."""
+        self.df = self.df.iloc[:self._base_rider_count].reset_index(drop=True)
 
     def _on_page_changed(self, page_id):
         self.setButtonLayout([])

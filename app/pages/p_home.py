@@ -299,6 +299,7 @@ _MODES = [
     ('random',       'RANDOM RACE',          'Pick any circuit for a single weekend'),
     ('championship', 'CHAMPIONSHIP',         'Arrange a calendar and run a full season'),
     ('history',      'CHAMPIONSHIP HISTORY', 'Past champions and all-time rider records'),
+    ('career',       'CAREER',               'Create a rider and live out their racing career'),
     ('gallery',      'GALLERY',              'Browse rider and team profiles'),
     ('soundtrack',   'SOUNDTRACK',           'Browse and play music tracks'),
     ('exit',         'EXIT',                 'Close the application'),
@@ -475,6 +476,8 @@ class HomePage(QWizardPage):
             return self._wiz.ID_CALENDAR
         if self._wiz.mode == 'history':
             return self._wiz.ID_HISTORY
+        if self._wiz.mode == 'career':
+            return self._wiz.ID_CAREER
         if self._wiz.mode == 'gallery':
             return self._wiz.ID_GALLERY
         if self._wiz.mode == 'soundtrack':

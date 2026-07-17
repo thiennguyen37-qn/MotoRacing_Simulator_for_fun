@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, QSize
 from app.widgets.table_utils import (make_table, fill_table, row_bg,
                                       TEAM_COLOR, _DEFAULT_COLOR, GRID_ROLE)
 from app.pages.p_calendar import _ISO2
-from app.wizard import HISTORY_FILE as _HISTORY
+from app.wizard import SEASON_MODES
 from src.simulator import POINTS
 
 _FLAGS = Path(__file__).parent.parent.parent / 'data' / 'flags'
@@ -184,11 +184,12 @@ class ChampionshipPage(QWizardPage):
     def initializePage(self):
         wiz = self._wiz
 
-        if wiz.mode == 'championship':
+        if wiz.mode in SEASON_MODES:
             season = wiz.season_df if wiz.season_df is not None else wiz.circuits_df
             n   = len(season)
             idx = wiz.circuit_index
-            self.setSubTitle(f"{wiz.season_year} World Championship  ·  "
+            label = 'World Championship' if wiz.mode == 'championship' else 'Career Season'
+            self.setSubTitle(f"{wiz.season_year} {label}  ·  "
                              f"Round {idx + 1}/{n}  —  {wiz.circuit['circuit_name']}")
             self._info_lbl.setText(
                 f"  Season standing after {idx + 1} of {n} rounds"
@@ -207,7 +208,7 @@ class ChampionshipPage(QWizardPage):
             self._btn_finish.setVisible(False)
 
         # per-round results only make sense across a season
-        self._tabs.setTabVisible(3, wiz.mode == 'championship')
+        self._tabs.setTabVisible(3, wiz.mode in SEASON_MODES)
 
         self._compute()
 
@@ -262,7 +263,7 @@ class ChampionshipPage(QWizardPage):
                 self._in_content = True
                 self._update_nav_styles()
             return True
-        if key in (K.Key_Escape, K.Key_Backspace) and self._wiz.mode == 'championship':
+        if key in (K.Key_Escape, K.Key_Backspace) and self._wiz.mode in SEASON_MODES:
             self._confirm_home()      # save & exit to Home (with a confirm)
             return True
         return False    # random mode: Esc/Backspace fall through -> wizard.back()
@@ -306,12 +307,12 @@ class ChampionshipPage(QWizardPage):
     def _has_next_round(self) -> bool:
         wiz = self._wiz
         season = wiz.season_df if wiz.season_df is not None else wiz.circuits_df
-        return wiz.mode == 'championship' and wiz.circuit_index < len(season) - 1
+        return wiz.mode in SEASON_MODES and wiz.circuit_index < len(season) - 1
 
     def _on_next_clicked(self):
         if self._has_next_round():
             self._advance_round()
-        elif self._wiz.mode == 'championship':
+        elif self._wiz.mode in SEASON_MODES:
             self._next_season()
         else:
             self._wiz.accept()          # random race: finish -> home
@@ -404,7 +405,7 @@ class ChampionshipPage(QWizardPage):
         Hard invariant: only a season that is definitely over may be
         archived — enforced here, not just at the call sites."""
         wiz = self._wiz
-        if (self._history_saved or wiz.mode != 'championship'
+        if (self._history_saved or wiz.mode not in SEASON_MODES
                 or self._rider_total is None or self._has_next_round()):
             return
         rounds = self._season_rounds()
@@ -473,15 +474,41 @@ class ChampionshipPage(QWizardPage):
             'rounds_detail': rounds_detail,
         }
 
+        history_path = wiz.history_path()
         data = {'seasons': []}
-        if _HISTORY.exists():
+        if history_path.exists():
             try:
-                data = json.loads(_HISTORY.read_text(encoding='utf-8'))
+                data = json.loads(history_path.read_text(encoding='utf-8'))
             except (json.JSONDecodeError, OSError):
                 pass                       # corrupt file -> start a fresh log
         data.setdefault('seasons', []).append(entry)
-        _HISTORY.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        history_path.write_text(json.dumps(data, indent=2), encoding='utf-8')
         self._history_saved = True
+
+        self._maybe_offer_number_switch(standings)
+
+    def _maybe_offer_number_switch(self, standings):
+        """Career only: a top-3 finish can swap the rider onto #1/#2/#3 for
+        next season, MotoGP-style — offered once, right after the season is
+        archived, so the choice doesn't affect this season's own results."""
+        wiz = self._wiz
+        if wiz.mode != 'career':
+            return
+        rider = wiz.load_career_rider()
+        if not rider:
+            return
+        pos = next((i + 1 for i, s in enumerate(standings) if s['name'] == rider['name']), None)
+        if pos not in (1, 2, 3) or int(rider['bike_number']) == pos:
+            return
+        from app.pages.p_home import ExitDialog
+        dlg = ExitDialog(
+            wiz,
+            message=f"P{pos} in the championship!\nSwitch to bike #{pos} next season?",
+            confirm_text=f"Yes, switch to #{pos}")
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            rider['bike_number'] = pos
+            wiz.save_career_rider(rider)
+            wiz.df.loc[wiz.df['name'] == rider['name'], 'bike_number'] = pos
 
     # ── Data ─────────────────────────────────────────────────────────────────
 
@@ -493,7 +520,7 @@ class ChampionshipPage(QWizardPage):
         otherwise. Each DataFrame carries name/pos/dnf.
         """
         wiz = self._wiz
-        if wiz.mode == 'championship':
+        if wiz.mode in SEASON_MODES:
             banked = [df for rd in wiz.round_results for df in rd['races']]
             return banked + wiz.race_results
         return wiz.race_results
@@ -545,7 +572,7 @@ class ChampionshipPage(QWizardPage):
     def _compute(self):
         wiz = self._wiz
 
-        if wiz.mode == 'championship':
+        if wiz.mode in SEASON_MODES:
             # Cumulative: all previous circuits + current circuit
             all_pts = wiz.all_race_pts + wiz.race_pts
         else:
@@ -585,7 +612,7 @@ class ChampionshipPage(QWizardPage):
             [i + 1, r['manufacturer'], r['points']] for i, r in self._manu_total.iterrows()
         ], team_col_idx=None, manu_col_idx=1, num_col_idx=None, name_col_idx=1, stretch_col=1)
 
-        if wiz.mode == 'championship':
+        if wiz.mode in SEASON_MODES:
             self._fill_results()
 
     @staticmethod

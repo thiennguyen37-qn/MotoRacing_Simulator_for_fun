@@ -180,6 +180,9 @@ class _MenuBar(QFrame):
         lay.addWidget(self._sub)
         self.set_state(False, True)
 
+    def set_title(self, text: str):
+        self._ttl.setText(text)
+
     def set_sub(self, text: str):
         self._sub.setText(text)
 
@@ -548,6 +551,19 @@ class CalendarPage(QWizardPage):
         """Entered from Home: show the New / Continue menu."""
         self._resume = False
         self._new_career = False
+        if getattr(self._wiz, 'skip_calendar_menu', False):
+            # A rider was just created in Career — there's obviously no
+            # season in progress yet, so the New/Continue choice would be
+            # meaningless. Go straight to building the calendar.
+            self._wiz.skip_calendar_menu = False
+            self._enter_calendar()
+            return
+        if self._wiz.mode == 'career':
+            self._mb_new.set_title('NEW CAREER SEASON')
+            self._mb_new.set_sub('Fresh season for this career — keeps the rider, resets the season history')
+        else:
+            self._mb_new.set_title('NEW CHAMPIONSHIP')
+            self._mb_new.set_sub('Fresh career from 2026 — resets the championship history')
         self._save = self._wiz.load_season_save()
         if self._save and self._save.get('season_complete'):
             self._mb_cont.set_sub(
@@ -720,9 +736,15 @@ class CalendarPage(QWizardPage):
         self._start.set_state(self.isComplete(), self._focus == 'start')
 
     def _set_focus(self, token):
+        # Only touch the slot bar that lost focus and the one that gained it
+        # — restyling all of them on every arrow-key press (up to 13) is what
+        # made this screen laggy.
+        old = self._focus
         self._focus = token
-        for i, bar in enumerate(self._slots):
-            bar.set_focused(token == i)
+        if isinstance(old, int) and 0 <= old < len(self._slots):
+            self._slots[old].set_focused(False)
+        if isinstance(token, int) and 0 <= token < len(self._slots):
+            self._slots[token].set_focused(True)
         self._len_bar.set_focused(token == 'len')
         self._random.set_focused(token == 'random')
         self._start.set_state(self.isComplete(), token == 'start')
@@ -769,9 +791,11 @@ class CalendarPage(QWizardPage):
         wiz.next()
 
     def _set_pick_focus(self, idx: int):
+        old = self._pick_focus
         self._pick_focus = idx
-        for i, row in enumerate(self._rows):
-            row.set_focused(i == idx)
+        if 0 <= old < len(self._rows):
+            self._rows[old].set_focused(False)
+        self._rows[idx].set_focused(True)
         # stats update instantly; the map follows once the cursor rests
         c = self._wiz.circuits_df.iloc[idx]
         self._stat_labels['LENGTH'].setText(f"{c['lap_length_km']} km")

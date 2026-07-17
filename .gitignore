@@ -27,3 +27,9 @@ audio/music/*.wav
 # Player data (championship archive + mid-season save)
 data/history.json
 data/season_save.json
+
+# Career mode save data (rider profiles + per-slot season save/archive)
+data/career/
+data/career_rider.json
+data/career_save.json
+data/career_history.json

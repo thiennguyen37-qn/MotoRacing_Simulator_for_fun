@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt
 
 from src.simulator import run_practice
 from app.widgets.table_utils import make_table, fill_table, SESSION_BTN_SS
+from app.wizard import SEASON_MODES
 
 HEADERS = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'BEST LAP', 'GAP']
 
@@ -46,8 +47,8 @@ class PracticePage(QWizardPage):
 
     def initializePage(self):
         wiz = self._wiz
-        # Championship: auto-select current circuit from index
-        if wiz.mode == 'championship':
+        # Championship / Career: auto-select current circuit from index
+        if wiz.mode in SEASON_MODES:
             idx = wiz.circuit_index
             season = wiz.season_df if wiz.season_df is not None else wiz.circuits_df
             wiz.circuit     = season.iloc[idx]
@@ -56,7 +57,8 @@ class PracticePage(QWizardPage):
             wiz.race_pts         = []
             wiz.race_results     = []
             n = len(season)
-            self.setSubTitle(f"{wiz.season_year} World Championship  ·  "
+            label = 'World Championship' if wiz.mode == 'championship' else 'Career Season'
+            self.setSubTitle(f"{wiz.season_year} {label}  ·  "
                              f"Round {idx + 1}/{n}  —  {wiz.circuit['circuit_name']}  ({wiz.circuit['country']})")
         else:
             self.setSubTitle('Simulate the free practice session.')

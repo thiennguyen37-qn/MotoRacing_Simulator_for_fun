@@ -1420,10 +1420,19 @@ class _RiderStatsView(QWidget):
         vd.setStyleSheet('background: #111122; border: none;')
         root.addWidget(vd)
 
-        self._detail = _RiderRecordDetail()
+        # Each rider's detail is a page in a stack: built once, then switching
+        # is just setCurrentWidget (no rebuild/relayout). Rebuilding the whole
+        # season-by-season grid from scratch on every arrow-key press was the
+        # actual lag — same fix as Gallery's _RidersView. The rest are warmed
+        # in the background so even held-key scrolling stays smooth.
+        self._pages: dict = {}
+        self._stack = QStackedWidget()
         scroll_r = _make_scroll_area()
-        scroll_r.setWidget(self._detail)
+        scroll_r.setWidget(self._stack)
         root.addWidget(scroll_r, 7)
+
+        self._warm = QTimer(self)
+        self._warm.timeout.connect(self._prewarm_step)
 
     def _bike_numbers(self) -> dict:
         df = getattr(self._wiz, 'df', None)
@@ -1432,9 +1441,13 @@ class _RiderStatsView(QWidget):
         return {str(r['name']): int(r['bike_number']) for _, r in df.iterrows()}
 
     def rebuild(self, seasons: list):
+        self._warm.stop()
         for it in self._items.values():
             it.setParent(None)
         self._items.clear()
+        for page in self._pages.values():
+            self._stack.removeWidget(page)
+        self._pages.clear()
         self._recs.clear()
         self._current = None
 
@@ -1452,15 +1465,35 @@ class _RiderStatsView(QWidget):
             self._items[name] = item
         if order:
             self._on_select(order[0][0])
+            self._warm.start(30)             # warm the rest while idle
         else:
-            self._detail._placeholder('No records yet')
+            ph = _RiderRecordDetail()
+            ph._placeholder('No records yet')
+            self._stack.addWidget(ph)
+            self._stack.setCurrentWidget(ph)
+
+    def _page_for(self, name: str) -> QWidget:
+        d = self._pages.get(name)
+        if d is None:
+            d = _RiderRecordDetail()
+            d.load({'name': name, **self._recs[name]})
+            self._stack.addWidget(d)
+            self._pages[name] = d
+        return d
+
+    def _prewarm_step(self):
+        rest = [n for n in self._items if n not in self._pages]
+        if rest:
+            self._page_for(rest[0])
+        else:
+            self._warm.stop()
 
     def _on_select(self, name: str):
         if self._current and self._current in self._items:
             self._items[self._current].set_selected(False)
         self._current = name
         self._items[name].set_selected(True)
-        self._detail.load({'name': name, **self._recs[name]})
+        self._stack.setCurrentWidget(self._page_for(name))
 
     def move_selection(self, forward: bool):
         names = list(self._items.keys())
@@ -1532,6 +1565,10 @@ class _SeasonStatsView(QWidget):
             self._set_focus(next(iter(self._items)))
 
     def _set_focus(self, key: str):
+        """Full pass — only for a fresh reset_selection(); Up/Down navigation
+        uses move_focus's targeted update instead (restyling every season
+        card on each keystroke gets slower the longer a career runs, since
+        one season is appended per completed championship)."""
         for k, it in self._items.items():
             it.set_selected(k == key)
         self._focus_key = key
@@ -1542,7 +1579,10 @@ class _SeasonStatsView(QWidget):
             return
         idx = keys.index(self._focus_key) if self._focus_key in keys else -1
         new = keys[(idx + (1 if forward else -1)) % len(keys)]
-        self._set_focus(new)
+        if self._focus_key in self._items:
+            self._items[self._focus_key].set_selected(False)
+        self._items[new].set_selected(True)
+        self._focus_key = new
         self._left_scroll.ensureWidgetVisible(self._items[new])
 
     def open_focused(self):

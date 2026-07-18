@@ -638,6 +638,8 @@ class CalendarPage(QWizardPage):
         return True
 
     def nextId(self):
+        if self._wiz.mode == 'career':
+            return self._wiz.ID_SEASON_HUB
         return self._wiz.ID_PRACTICE
 
     # ── Keyboard ──────────────────────────────────────────────────────────────

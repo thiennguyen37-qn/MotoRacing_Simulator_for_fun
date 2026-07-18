@@ -124,6 +124,7 @@ class MotoWizard(QWizard):
         report(0.12, 'Loading modules')
         from app.pages.p_home          import HomePage
         from app.pages.p_calendar      import CalendarPage      # pulls in the map stack
+        from app.pages.p_season_hub    import SeasonHubPage
         from app.pages.p0_circuit      import CircuitPage
         from app.pages.p1_practice     import PracticePage
         from app.pages.p2_qualifying   import QualifyingPage
@@ -138,6 +139,7 @@ class MotoWizard(QWizard):
         builders = [
             ('ID_HOME',       'Home',         lambda: HomePage(self)),
             ('ID_CALENDAR',   'Season setup', lambda: CalendarPage(self)),
+            ('ID_SEASON_HUB', 'Season hub',   lambda: SeasonHubPage(self)),
             ('ID_CIRCUIT',    'Circuits',     lambda: CircuitPage(self)),
             ('ID_PRACTICE',   'Practice',     lambda: PracticePage(self)),
             ('ID_QUALI',      'Qualifying',   lambda: QualifyingPage(self)),
@@ -190,6 +192,14 @@ class MotoWizard(QWizard):
         if not self._audio_started:
             self._audio_started = True
             self._audio.start()
+
+    def pause_music(self):
+        """Silence the background playlist (e.g. a page playing its own
+        clip's audio) without touching the user's mute/SFX state."""
+        self._audio.pause_music()
+
+    def resume_music(self):
+        self._audio.resume_music()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

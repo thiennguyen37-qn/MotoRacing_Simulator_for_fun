@@ -163,6 +163,15 @@ if _OK:
             if not self._muted:
                 self._music_player.play()
 
+        def pause_music(self) -> None:
+            """Silence the background playlist (e.g. while a page plays its
+            own audio) without touching the user's mute/SFX state."""
+            self._music_player.pause()
+
+        def resume_music(self) -> None:
+            if self._started and not self._muted:
+                self._music_player.play()
+
         @property
         def playlist_info(self) -> list[tuple[str, str]]:
             return list(self._track_info)
@@ -183,6 +192,8 @@ else:
         def play_at(self, idx: int) -> None: pass
         def play_sfx(self, key: str) -> None: pass
         def toggle_mute(self) -> None: pass
+        def pause_music(self) -> None: pass
+        def resume_music(self) -> None: pass
         @property
         def playlist_info(self) -> list: return []
         @property

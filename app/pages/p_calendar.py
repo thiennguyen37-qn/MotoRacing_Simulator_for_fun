@@ -19,11 +19,17 @@ _ISO2 = {
 }
 
 
-def _flag_pix(country: str, h: int = 14) -> QPixmap | None:
+def _flag_pix(country: str, w: int = 22, h: int = 14) -> QPixmap | None:
+    """Force every flag into the same w×h box (ignoring its native aspect
+    ratio) so the list reads as one uniform size — flag art varies from
+    ~1.5:1 to 2.5:1, so scaling to a fixed height alone left wide flags
+    (UK, Australia, Qatar) overflowing their fixed-width container and
+    getting clipped/shifted instead."""
     p = _FLAGS / f"{_ISO2.get(str(country), '')}.png"
     if not p.exists():
         return None
-    return QPixmap(str(p)).scaledToHeight(h, Qt.TransformationMode.SmoothTransformation)
+    return QPixmap(str(p)).scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                  Qt.TransformationMode.SmoothTransformation)
 
 
 def _caps_label(text: str, size: int = 8, color: str = '#ffffff') -> QLabel:

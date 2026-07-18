@@ -89,6 +89,7 @@ class QualifyingPage(QWizardPage):
         for t in (self._t_q1, self._t_q2, self._t_gr):
             t.setRowCount(0)
         self._wiz.grid_all_df = None
+        self._tabs.setCurrentIndex(0)
         self.completeChanged.emit()
 
     def _run_q1(self):

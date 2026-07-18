@@ -178,6 +178,11 @@ class CircuitPage(QWizardPage):
         # Select first item
         self._list.setCurrentRow(0)
 
+    def initializePage(self):
+        # Always start back on the first circuit rather than resuming
+        # whichever one was picked the last time this page was visited.
+        self._list.setCurrentRow(0)
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0))

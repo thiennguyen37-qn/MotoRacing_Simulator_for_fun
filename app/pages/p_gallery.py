@@ -632,9 +632,9 @@ class _RidersView(QWidget):
         # the background so even held-key scrolling stays smooth.
         self._pages: dict = {}
         self._stack = QStackedWidget()
-        scroll_r = _make_scroll_area()
-        scroll_r.setWidget(self._stack)
-        root.addWidget(scroll_r, 7)
+        self._scroll_r = _make_scroll_area()
+        self._scroll_r.setWidget(self._stack)
+        root.addWidget(self._scroll_r, 7)
 
     def populate(self):
         if self._items:
@@ -677,6 +677,9 @@ class _RidersView(QWidget):
         self._current = name
         self._items[name].set_selected(True)
         self._stack.setCurrentWidget(self._page_for(name))
+        bar = self._scroll_r.verticalScrollBar()
+        if bar is not None:
+            bar.setValue(0)          # always resume at the top, not the last scroll offset
 
     def move_selection(self, forward: bool):
         names = list(self._items.keys())
@@ -717,9 +720,9 @@ class _TeamsView(QWidget):
         # Team details are stack pages, built once (see _RidersView).
         self._pages: dict = {}
         self._stack = QStackedWidget()
-        scroll_r = _make_scroll_area()
-        scroll_r.setWidget(self._stack)
-        root.addWidget(scroll_r, 7)
+        self._scroll_r = _make_scroll_area()
+        self._scroll_r.setWidget(self._stack)
+        root.addWidget(self._scroll_r, 7)
 
     def populate(self):
         if self._items:
@@ -775,6 +778,9 @@ class _TeamsView(QWidget):
         self._current = team_name
         self._items[team_name].set_selected(True)
         self._stack.setCurrentWidget(self._page_for(team_name))
+        bar = self._scroll_r.verticalScrollBar()
+        if bar is not None:
+            bar.setValue(0)          # always resume at the top, not the last scroll offset
 
     def move_selection(self, forward: bool):
         teams = list(self._items.keys())

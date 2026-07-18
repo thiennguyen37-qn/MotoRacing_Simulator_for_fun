@@ -180,6 +180,7 @@ class RacePage(QWizardPage):
         self._t_r2.setRowCount(0)
         self._wiz.race_pts     = []
         self._wiz.race_results = []
+        self._tabs.setCurrentIndex(0)
         self.completeChanged.emit()
 
     def _run(self, race_num):

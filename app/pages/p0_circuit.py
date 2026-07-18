@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
                               QLabel, QFrame, QListWidget, QListWidgetItem,
                               QSizePolicy, QWidget)
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor
-from PyQt6.QtCore import Qt, QSize, QRectF, QTimer
+from PyQt6.QtCore import Qt, QSize, QTimer
 
 from app.widgets.world_map import WorldMapWidget
 
@@ -27,6 +27,8 @@ class CircuitPage(QWizardPage):
         self.setTitle('')
         self.setSubTitle('')
         self._bg_pixmap = QPixmap(str(_BG)) if _BG else QPixmap()
+        self._bg_scaled = QPixmap()
+        self._bg_scaled_size = None    # cache key: (widget_w, widget_h)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(36, 28, 36, 28)
@@ -187,12 +189,20 @@ class CircuitPage(QWizardPage):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0))
         if not self._bg_pixmap.isNull():
-            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            iw, ih = self._bg_pixmap.width(), self._bg_pixmap.height()
-            scale = max(self.width() / iw, self.height() / ih)
-            w, h = iw * scale, ih * scale
-            x, y = (self.width() - w) / 2, (self.height() - h) / 2
-            p.drawPixmap(QRectF(x, y, w, h), self._bg_pixmap, QRectF(0, 0, iw, ih))
+            W, H = self.width(), self.height()
+            if self._bg_scaled_size != (W, H):
+                # Cover-scale once per window size and cache it, rather than
+                # rescaling the full-res photo on every single repaint.
+                iw, ih = self._bg_pixmap.width(), self._bg_pixmap.height()
+                scale = max(W / iw, H / ih)
+                self._bg_scaled = self._bg_pixmap.scaled(
+                    max(1, round(iw * scale)), max(1, round(ih * scale)),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation)
+                self._bg_scaled_size = (W, H)
+            pm = self._bg_scaled
+            x, y = (W - pm.width()) // 2, (H - pm.height()) // 2
+            p.drawPixmap(x, y, pm)
         p.fillRect(self.rect(), QColor(0, 0, 8, 190))
 
     def _update_map(self):

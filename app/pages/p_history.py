@@ -421,6 +421,7 @@ class _RiderRecordDetail(QWidget):
         self._clear()
         self._rec = rec
         self._tab = 0
+        self._details_built = False
         cl = self._outer
 
         n = QLabel(rec['name'].upper())
@@ -446,10 +447,23 @@ class _RiderRecordDetail(QWidget):
         self._cstack = QStackedWidget()
         self._cstack.setStyleSheet('background: transparent;')
         self._cstack.addWidget(self._build_summary_page(rec))     # 0 SUMMARY
-        self._cstack.addWidget(self._build_details_page(rec))     # 1 DETAILS
+        self._cstack.addWidget(QWidget())                         # 1 DETAILS — built lazily
         cl.addWidget(self._cstack, 1)
 
         self._refresh()
+
+    def _ensure_details_built(self):
+        """Build the race-by-race matrix on first visit to DETAILS, not
+        eagerly in load() — that page is what the background rider-list
+        prewarm was paying for on every rider whether the player ever opened
+        it or not, and it's the expensive one (a QTableWidget cell per race)."""
+        if self._details_built or self._rec is None:
+            return
+        self._details_built = True
+        old = self._cstack.widget(1)
+        self._cstack.removeWidget(old)
+        old.deleteLater()
+        self._cstack.insertWidget(1, self._build_details_page(self._rec))
 
     def _build_summary_page(self, rec: dict) -> QWidget:
         """Career totals + season-by-season — the pre-existing view, unchanged."""
@@ -514,9 +528,9 @@ class _RiderRecordDetail(QWidget):
         self._tab = 0
         self._refresh()
         for i in range(self._cstack.count()):
-            bar = self._cstack.widget(i).verticalScrollBar()
-            if bar is not None:
-                bar.setValue(0)
+            bar = getattr(self._cstack.widget(i), 'verticalScrollBar', None)
+            if bar is not None and bar() is not None:
+                bar().setValue(0)
 
     def handle_key(self, key: int):
         """Drive the tabbed detail. Returns 'close' when the user backs out
@@ -542,6 +556,8 @@ class _RiderRecordDetail(QWidget):
             if w is not None:
                 w.setParent(None)
         self._tab_lay.addWidget(_tab_bar(self.TABS, self._tab))
+        if self._tab == 1:
+            self._ensure_details_built()
         self._cstack.setCurrentIndex(self._tab)
         self._scrollable = self._cstack.currentWidget()
 

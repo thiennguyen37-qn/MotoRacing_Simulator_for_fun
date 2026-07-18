@@ -131,7 +131,8 @@ def _aggregate_riders(seasons: list) -> dict:
                 a['manufacturer'] = manu
             else:
                 pos, pts = None, 0
-            a['history'].append({'year': year, 'pos': pos, 'points': pts, **per})
+            a['history'].append({'year': year, 'pos': pos, 'points': pts,
+                                 'rounds_detail': s.get('rounds_detail'), **per})
         champ = s.get('champion') or {}
         if champ.get('name') in agg:
             agg[champ['name']]['titles'] += 1
@@ -374,25 +375,25 @@ class _SeasonItem(QWidget):
 # ── Detail panels ─────────────────────────────────────────────────────────────
 
 class _RiderRecordDetail(QWidget):
+    """Right-hand panel for one rider: name/team header, then a Summary /
+    Details tab pair (career totals + season-by-season vs. race-by-race)."""
+
+    TABS = ['SUMMARY', 'DETAILS']
+
     def __init__(self):
         super().__init__()
         self.setAutoFillBackground(False)
         self.setStyleSheet('background: transparent;')
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(48, 48, 48, 48)
         self._outer.setSpacing(0)
-        self._placeholder('← Select a rider')
-
-    def _placeholder(self, text: str):
-        self._clear()
-        ph = QLabel(text)
-        ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ph.setFont(QFont('Segoe UI', 13))
-        ph.setStyleSheet('color: #2d2d44; background: transparent; border: none;')
-        self._outer.addStretch(1)
-        self._outer.addWidget(ph, 0, Qt.AlignmentFlag.AlignCenter)
-        self._outer.addStretch(1)
+        self._rec = None
+        self._tab = 0
+        self._tab_lay = None
+        self._cstack = None
+        self._scrollable = None
+        self._placeholder()
 
     def _clear(self):
         while self._outer.count():
@@ -401,8 +402,25 @@ class _RiderRecordDetail(QWidget):
             if w is not None:
                 w.setParent(None)
 
+    def _placeholder(self, text: str = ''):
+        # Browse state (no rider opened): nothing shown — no annotation text.
+        self._clear()
+        self._rec = None
+        self._cstack = None
+        self._scrollable = None
+        if text:
+            ph = QLabel(text)
+            ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            ph.setFont(QFont('Segoe UI', 13))
+            ph.setStyleSheet('color: #2d2d44; background: transparent; border: none;')
+            self._outer.addStretch(1)
+            self._outer.addWidget(ph, 0, Qt.AlignmentFlag.AlignCenter)
+            self._outer.addStretch(1)
+
     def load(self, rec: dict):
         self._clear()
+        self._rec = rec
+        self._tab = 0
         cl = self._outer
 
         n = QLabel(rec['name'].upper())
@@ -415,30 +433,129 @@ class _RiderRecordDetail(QWidget):
         t.setFont(QFont('Segoe UI', 13))
         t.setStyleSheet('color: #ffffff; background: transparent; border: none;')
         cl.addWidget(t)
-        cl.addSpacing(34)
+        cl.addSpacing(28)
 
-        # ── Career totals (Races, Wins, Podiums, Poles, Fastest Laps, Points, Titles)
-        cl.addWidget(_section_label('CAREER TOTALS'))
+        self._tab_holder = QWidget()
+        self._tab_holder.setStyleSheet('background: transparent;')
+        self._tab_lay = QVBoxLayout(self._tab_holder)
+        self._tab_lay.setContentsMargins(0, 0, 0, 0)
+        self._tab_lay.setSpacing(0)
+        cl.addWidget(self._tab_holder)
         cl.addSpacing(20)
-        cl.addWidget(_stat_tiles([(label, rec.get(key, 0)) for label, key in _TOTAL_COLS]))
-        cl.addSpacing(34)
-        cl.addWidget(_divider())
-        cl.addSpacing(26)
 
-        # ── Season by season ───────────────────────────────────────────────
-        cl.addWidget(_section_label('SEASON BY SEASON'))
-        cl.addSpacing(14)
-        cl.addWidget(_sbs_row([h for h, _w, _a in _SBS_COLS], header=True))
-        cl.addSpacing(10)
-        for h in sorted(rec['history'], key=lambda x: str(x['year']), reverse=True):
+        self._cstack = QStackedWidget()
+        self._cstack.setStyleSheet('background: transparent;')
+        self._cstack.addWidget(self._build_summary_page(rec))     # 0 SUMMARY
+        self._cstack.addWidget(self._build_details_page(rec))     # 1 DETAILS
+        cl.addWidget(self._cstack, 1)
+
+        self._refresh()
+
+    def _build_summary_page(self, rec: dict) -> QWidget:
+        """Career totals + season-by-season — the pre-existing view, unchanged."""
+        scroll = _make_scroll_area()
+        cont = QWidget()
+        cont.setStyleSheet('background: transparent;')
+        lay = QVBoxLayout(cont)
+        lay.setContentsMargins(0, 0, 12, 0)
+        lay.setSpacing(0)
+
+        lay.addWidget(_section_label('CAREER TOTALS'))
+        lay.addSpacing(20)
+        lay.addWidget(_stat_tiles([(label, rec.get(key, 0)) for label, key in _TOTAL_COLS]))
+        lay.addSpacing(34)
+        lay.addWidget(_divider())
+        lay.addSpacing(26)
+
+        lay.addWidget(_section_label('SEASON BY SEASON'))
+        lay.addSpacing(14)
+        lay.addWidget(_sbs_row([h for h, _w, _a in _SBS_COLS], header=True))
+        lay.addSpacing(10)
+        for h in sorted(rec['history'], key=lambda x: str(x['year'])):
             pos = h['pos']
-            cl.addWidget(_sbs_row([
+            lay.addWidget(_sbs_row([
                 str(h['year']), f'P{pos}' if pos else '—', h['races'], h['wins'],
                 h['podiums'], h['poles'], h['fastest_laps'], h['points'],
             ], medal=_medal_color(pos)))
-            cl.addSpacing(12)
+            lay.addSpacing(12)
+        lay.addStretch(1)
 
-        cl.addStretch(1)
+        scroll.setWidget(cont)
+        return scroll
+
+    def _build_details_page(self, rec: dict) -> QWidget:
+        """Race-by-race grid: one row per season, R1…Rn columns."""
+        matrix = _build_rider_race_matrix(rec)
+        if matrix is not None:
+            return matrix
+
+        scroll = _make_scroll_area()
+        cont = QWidget()
+        cont.setStyleSheet('background: transparent;')
+        lay = QVBoxLayout(cont)
+        lay.setContentsMargins(0, 0, 12, 0)
+        note = QLabel("Detailed per-round results were not recorded for any of "
+                      "this rider's seasons.")
+        note.setWordWrap(True)
+        note.setFont(QFont('Segoe UI', 11))
+        note.setStyleSheet('color: #8a8aa2; background: transparent; border: none;')
+        lay.addWidget(note)
+        lay.addStretch(1)
+        scroll.setWidget(cont)
+        return scroll
+
+    # ── navigation ──────────────────────────────────────────────────────────────
+    def reset_tab(self):
+        """Back to SUMMARY, scrolled to the top — called every time this
+        (cached) page is reopened, so a rider always starts fresh rather than
+        resuming whatever tab/scroll position the previous visit left off."""
+        if self._rec is None:
+            return
+        self._tab = 0
+        self._refresh()
+        for i in range(self._cstack.count()):
+            bar = self._cstack.widget(i).verticalScrollBar()
+            if bar is not None:
+                bar.setValue(0)
+
+    def handle_key(self, key: int):
+        """Drive the tabbed detail. Returns 'close' when the user backs out
+        (the caller reopens the rider list)."""
+        if self._rec is None:
+            return 'close' if key in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace) else None
+        K = Qt.Key
+        if key in (K.Key_Left, K.Key_Right):          # scroll a wide race grid
+            self._hscroll(-110 if key == K.Key_Left else 110)
+        elif key in (K.Key_Up, K.Key_Down):
+            self._scroll(-60 if key == K.Key_Up else 60)
+        elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+            self._tab = 1 - self._tab                 # toggle Summary / Details
+            self._refresh()
+        elif key in (K.Key_Escape, K.Key_Backspace):
+            return 'close'
+        return None
+
+    def _refresh(self):
+        while self._tab_lay.count():
+            it = self._tab_lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None)
+        self._tab_lay.addWidget(_tab_bar(self.TABS, self._tab))
+        self._cstack.setCurrentIndex(self._tab)
+        self._scrollable = self._cstack.currentWidget()
+
+    def _scroll(self, delta: int):
+        if self._scrollable is not None:
+            bar = self._scrollable.verticalScrollBar()
+            if bar is not None:
+                bar.setValue(bar.value() + delta)
+
+    def _hscroll(self, delta: int):
+        if self._scrollable is not None:
+            bar = self._scrollable.horizontalScrollBar()
+            if bar is not None:
+                bar.setValue(bar.value() + delta)
 
 
 # ── Season results palette + builders ──────────────────────────────────────────
@@ -719,6 +836,79 @@ def _build_matrix(data: dict, kind: str):
     pts_hdr = t.horizontalHeaderItem(res0 + n_races)
     if pts_hdr is not None:
         pts_hdr.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+    return t
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return f'{n}{suffix}'
+
+
+_SEASON_MEDAL_BG = {1: _C_WIN, 2: _C_P2, 3: _C_P3}
+
+
+def _rider_race_results(name: str, rounds_detail) -> list | None:
+    """This rider's result in every race of one season, calendar order (one
+    entry per race, not per round). None when the season predates per-round
+    recording."""
+    if not rounds_detail:
+        return None
+    out = []
+    for rnd in rounds_detail:
+        for race in rnd.get('races', []):
+            out.append(next((r for r in race if r['name'] == name), None))
+    return out
+
+
+def _build_rider_race_matrix(rec: dict):
+    """Race-by-race grid for one rider: a row per season (earliest on top),
+    columns R1…Rn (n = the longest season on record) plus a PTS total,
+    coloured like the season Results matrix. Seasons shorter than n leave the
+    trailing cells blank. Returns None when none of the rider's seasons have
+    per-round data."""
+    seasons = sorted(rec['history'], key=lambda x: str(x['year']))
+    per_season = [(h, _rider_race_results(rec['name'], h.get('rounds_detail'))) for h in seasons]
+    if all(results is None for _, results in per_season):
+        return None
+
+    max_races = max((len(results) for _, results in per_season if results is not None), default=0)
+    pts_col = 1 + max_races
+    pos_col = pts_col + 1
+    headers = ['YEAR'] + [f'R{i + 1}' for i in range(max_races)] + ['PTS', 'POSITION']
+    t = make_table(headers)
+    t.setRowCount(len(per_season))
+    neutral = row_bg(_DEFAULT_COLOR)
+
+    for i, (h, results) in enumerate(per_season):
+        t.setItem(i, 0, _cell(h['year'], neutral, _CELL_W, bold=True, center=True, size=11))
+        for c in range(max_races):
+            r = results[c] if (results is not None and c < len(results)) else None
+            if r is None:
+                t.setItem(i, 1 + c, _grid_cell('', neutral))
+            else:
+                txt = 'Ret' if r['dnf'] else str(r['pos'])
+                t.setItem(i, 1 + c, _grid_cell(txt, _pos_bg(r['pos'], r['dnf'])))
+        t.setItem(i, pts_col, _cell(h.get('points', 0), neutral, _CELL_W, bold=True, center=True, size=11))
+        pos = h.get('pos')
+        pos_bg = _SEASON_MEDAL_BG.get(pos, neutral)
+        t.setItem(i, pos_col, _cell(_ordinal(pos) if pos else '—', pos_bg, _CELL_W, bold=True, center=True, size=11))
+
+    t.setColumnWidth(0, 70)
+    for c in range(max_races):
+        t.setColumnWidth(1 + c, 54)
+    t.setColumnWidth(pts_col, 70)
+    t.setColumnWidth(pos_col, 80)
+    t.horizontalHeader().setStretchLastSection(False)
+    t.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    # Centre every column header so they line up with the centred values below.
+    for c in range(pos_col + 1):
+        hdr = t.horizontalHeaderItem(c)
+        if hdr is not None:
+            hdr.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
     return t
 
 
@@ -1400,12 +1590,17 @@ class _SeasonStatDetail(QWidget):
 # ── Split views (3:7) ─────────────────────────────────────────────────────────
 
 class _RiderStatsView(QWidget):
+    """List of riders on the left; the right panel stays blank while browsing
+    and only shows a rider's record once Enter opens it (mirrors
+    _SeasonStatsView's focus-vs-opened split below)."""
+
     def __init__(self, wiz):
         super().__init__()
-        self._wiz     = wiz
-        self._items   = {}
-        self._recs    = {}
-        self._current = None
+        self._wiz         = wiz
+        self._items        = {}
+        self._recs         = {}
+        self._focus_name   = None   # highlighted row while browsing
+        self._opened_name  = None   # rider whose record is shown (None = browsing)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
@@ -1413,12 +1608,12 @@ class _RiderStatsView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        left_outer, self._list_lay, self._left_scroll = _make_list_panel()
-        root.addWidget(left_outer, 3)
+        self._left_outer, self._list_lay, self._left_scroll = _make_list_panel()
+        root.addWidget(self._left_outer, 3)
 
-        vd = QFrame(); vd.setFixedWidth(1)
-        vd.setStyleSheet('background: #111122; border: none;')
-        root.addWidget(vd)
+        self._vd = QFrame(); self._vd.setFixedWidth(1)
+        self._vd.setStyleSheet('background: #111122; border: none;')
+        root.addWidget(self._vd)
 
         # Each rider's detail is a page in a stack: built once, then switching
         # is just setCurrentWidget (no rebuild/relayout). Rebuilding the whole
@@ -1426,7 +1621,9 @@ class _RiderStatsView(QWidget):
         # actual lag — same fix as Gallery's _RidersView. The rest are warmed
         # in the background so even held-key scrolling stays smooth.
         self._pages: dict = {}
+        self._blank = _RiderRecordDetail()      # shared empty-state page
         self._stack = QStackedWidget()
+        self._stack.addWidget(self._blank)
         scroll_r = _make_scroll_area()
         scroll_r.setWidget(self._stack)
         root.addWidget(scroll_r, 7)
@@ -1449,7 +1646,7 @@ class _RiderStatsView(QWidget):
             self._stack.removeWidget(page)
         self._pages.clear()
         self._recs.clear()
-        self._current = None
+        self._focus_name = None
 
         agg      = _aggregate_riders(seasons)
         bike_no  = self._bike_numbers()
@@ -1460,17 +1657,59 @@ class _RiderStatsView(QWidget):
         for name, rec in order:
             tc = _team_color(rec.get('team', ''), rec.get('manufacturer', ''))
             item = _RankItem(bike_no.get(name), name, rec['titles'], tc)
-            item.clicked.connect(self._on_select)
+            item.clicked.connect(self._on_click)
             self._list_lay.insertWidget(self._list_lay.count() - 1, item)
             self._items[name] = item
+        self.reset_selection()
         if order:
-            self._on_select(order[0][0])
             self._warm.start(30)             # warm the rest while idle
+
+    def reset_selection(self):
+        """Back to browsing: right panel blank, list keeps only a focus highlight."""
+        self._opened_name = None
+        self._left_outer.show()
+        self._vd.show()
+        self._stack.setCurrentWidget(self._blank)
+        if self._items:
+            self._blank._placeholder()
+            if self._focus_name not in self._items:
+                self._focus_name = next(iter(self._items))
+            self._set_focus(self._focus_name)
         else:
-            ph = _RiderRecordDetail()
-            ph._placeholder('No records yet')
-            self._stack.addWidget(ph)
-            self._stack.setCurrentWidget(ph)
+            self._blank._placeholder('No records yet')
+
+    def _set_focus(self, name: str):
+        for n, it in self._items.items():
+            it.set_selected(n == name)
+        self._focus_name = name
+
+    def move_focus(self, forward: bool):
+        names = list(self._items.keys())
+        if not names:
+            return
+        idx = names.index(self._focus_name) if self._focus_name in names else -1
+        new = names[(idx + (1 if forward else -1)) % len(names)]
+        self._set_focus(new)
+        self._left_scroll.ensureWidgetVisible(self._items[new])
+
+    def open_focused(self):
+        if self._focus_name is not None:
+            self._open(self._focus_name)
+
+    def _on_click(self, name: str):
+        # Mouse click both focuses and opens the rider immediately.
+        if name not in self._items:
+            return
+        self._set_focus(name)
+        self._open(name)
+
+    def _open(self, name: str):
+        self._opened_name = name
+        self._left_outer.hide()          # full-width detail — no dead space
+        self._vd.hide()
+        page = self._page_for(name)
+        page.reset_tab()                 # always resume on SUMMARY, not the last-viewed tab
+        self._stack.setCurrentWidget(page)
 
     def _page_for(self, name: str) -> QWidget:
         d = self._pages.get(name)
@@ -1488,21 +1727,25 @@ class _RiderStatsView(QWidget):
         else:
             self._warm.stop()
 
-    def _on_select(self, name: str):
-        if self._current and self._current in self._items:
-            self._items[self._current].set_selected(False)
-        self._current = name
-        self._items[name].set_selected(True)
-        self._stack.setCurrentWidget(self._page_for(name))
+    def handle_key(self, key: int):
+        """All keys while the Rider Stats view is showing. Returns 'back' when
+        the caller should leave the split view."""
+        K = Qt.Key
+        if self._opened_name is None:           # browsing the rider list
+            if key in (K.Key_Escape, K.Key_Backspace):
+                return 'back'
+            if key in (K.Key_Up, K.Key_Down):
+                self.move_focus(key == K.Key_Down)
+            elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+                self.open_focused()
+            return True
 
-    def move_selection(self, forward: bool):
-        names = list(self._items.keys())
-        if not names:
-            return
-        idx = names.index(self._current) if self._current in names else -1
-        new = names[(idx + (1 if forward else -1)) % len(names)]
-        self._on_select(new)
-        self._left_scroll.ensureWidgetVisible(self._items[new])
+        # A rider is open — its detail owns tab-switch/scroll keys. When it
+        # backs out of its top level, return to browsing the list.
+        page = self._pages.get(self._opened_name)
+        if page is not None and page.handle_key(key) == 'close':
+            self.reset_selection()
+        return True
 
     def paintEvent(self, event):
         QPainter(self).fillRect(self.rect(), _TINT)
@@ -1716,12 +1959,9 @@ class HistoryPage(QWizardPage):
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
                 (self._open_riders if self._card_focus == 0 else self._open_seasons)()
                 return True
-        elif idx == 1:                         # Riders: navigate selects live
-            if key in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace):
+        elif idx == 1:                         # Rider Stats owns its own keys
+            if self._riders_view.handle_key(key) == 'back':
                 self._stack.setCurrentIndex(0)
-                return True
-            if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-                self._riders_view.move_selection(key == Qt.Key.Key_Down)
             return True
         elif idx == 2:                         # Season Stats owns its own keys
             if self._seasons_view.handle_key(key) == 'back':

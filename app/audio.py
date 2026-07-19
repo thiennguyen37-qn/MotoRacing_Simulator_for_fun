@@ -31,7 +31,7 @@ if _OK:
 
         Drop audio files into audio/music/ — plays in filename order, loops.
         SFX files: audio/sfx/navigate · select · back  (.wav/.mp3/.ogg)
-        Press M to mute/unmute.
+        Press M to mute/unmute the music playlist — navigation SFX always play.
         """
 
         track_changed = pyqtSignal(str, str)  # title, artist
@@ -146,8 +146,8 @@ if _OK:
                 self._play_track(idx)
 
         def play_sfx(self, key: str) -> None:
-            if self._muted:
-                return
+            """Navigation SFX play regardless of mute — M only silences the
+            music playlist, not UI feedback sounds."""
             eff = self._sfx.get(key)
             if eff is not None:
                 eff.play()          # retriggers from the start; no re-decode

@@ -405,6 +405,7 @@ class HomePage(QWizardPage):
         wiz.mode          = None
         wiz.circuit_index = 0
         wiz.all_race_pts  = []
+        wiz.reset_roster_to_base()   # drop any Career rider appended by a previous session
         from app.wizard import START_YEAR
         wiz.season_year   = START_YEAR
         self.completeChanged.emit()

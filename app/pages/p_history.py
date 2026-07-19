@@ -1002,9 +1002,18 @@ def _honours_data(data: dict) -> dict:
     tallies — mirroring how the app already attributes results to a make."""
     names = data['names']
     rider = {nm: {'wins': 0, 'podiums': 0, 'poles': 0} for nm in names}
-    for rm in data['race_maps']:
+    col_round = data.get('col_round', [])
+    counted_rounds = set()
+    for c, rm in enumerate(data['race_maps']):
+        # Pole is set once per round — both races share the same qualifying
+        # grid — so tally it only from a round's first race, the same rule
+        # _save_history()'s archived 'poles' stat already follows. Counting
+        # every race here double-counted every round's pole.
+        round_idx = col_round[c] if c < len(col_round) else c
+        first_race_of_round = round_idx not in counted_rounds
+        counted_rounds.add(round_idx)
         for r in rm.values():
-            if r.get('pole'):
+            if first_race_of_round and r.get('pole'):
                 rider[r['name']]['poles'] += 1
             if not r.get('dnf'):
                 pos = int(r.get('pos', 0))

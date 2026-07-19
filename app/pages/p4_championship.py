@@ -326,22 +326,32 @@ class ChampionshipPage(QWizardPage):
         self._wiz.accept()
 
     def _confirm_home(self):
-        """Esc on the standings: confirm, then save & return to Home so no
-        progress is lost. Mid-season banks the round just raced (CONTINUE
-        resumes at the next one); a finished season is archived with a marker
-        so CONTINUE opens next year's calendar."""
+        """Esc on the standings: confirm, then save. Career returns to the
+        Season Hub — it already has its own Main Menu exit from there —
+        while Championship/Random go all the way back to Home. Mid-season
+        banks the round just raced (CONTINUE resumes at the next one); a
+        finished season is archived with a marker so CONTINUE opens next
+        year's calendar."""
         from app.pages.p_home import ExitDialog
-        dlg = ExitDialog(self._wiz, message='Return to Home?', confirm_text='Yes')
+        wiz = self._wiz
+        to_hub = wiz.mode == 'career'
+        dlg = ExitDialog(wiz, message='Return to Career Hub?' if to_hub else 'Return to Home?',
+                         confirm_text='Yes')
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        wiz = self._wiz
         if self._has_next_round():
             self._bank_round()
             wiz.save_season()
         else:
             self._save_history()
             wiz.save_next_season_marker()
-        wiz.accept()
+        if not to_hub:
+            wiz.accept()
+            return
+        while wiz.currentId() not in (wiz.ID_SEASON_HUB, wiz.startId()):
+            wiz.back()
+        if wiz.currentId() == wiz.ID_SEASON_HUB:
+            wiz.currentPage().resume_at_hub()
 
     def _next_season(self):
         """Archive the finished season and rewind to the Season Calendar."""

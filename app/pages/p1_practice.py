@@ -52,10 +52,11 @@ class PracticePage(QWizardPage):
             idx = wiz.circuit_index
             season = wiz.season_df if wiz.season_df is not None else wiz.circuits_df
             wiz.circuit     = season.iloc[idx]
-            wiz.practice_results = None
-            wiz.grid_all_df      = None
-            wiz.race_pts         = []
-            wiz.race_results     = []
+            wiz.practice_results  = None
+            wiz.grid_all_df       = None
+            wiz.race_pts          = []
+            wiz.race_results      = []
+            wiz.race_fastest_laps = []
             n = len(season)
             label = 'World Championship' if wiz.mode == 'championship' else 'Career Season'
             self.setSubTitle(f"{wiz.season_year} {label}  ·  "

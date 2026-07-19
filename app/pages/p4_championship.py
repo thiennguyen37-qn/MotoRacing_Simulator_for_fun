@@ -13,6 +13,34 @@ from app.pages.p_calendar import _ISO2
 from app.wizard import SEASON_MODES
 from src.simulator import POINTS
 
+def _round_lap_records(wiz) -> dict:
+    """Fastest lap set anywhere in the round currently in progress —
+    {'race': (seconds, name) | None, 'session': (seconds, name) | None}.
+    'race' only looks at the two races (feeds Season Hub's BRLC); 'session'
+    folds in Practice and Qualifying too (BLC) — see
+    p_season_hub._track_records, which picks the all-time min per circuit
+    out of these per-round values."""
+    race_candidates = list(getattr(wiz, 'race_fastest_laps', []))
+    session_candidates = list(race_candidates)
+
+    pr = getattr(wiz, 'practice_results', None)
+    if pr is not None and not pr.empty:
+        i = pr['best_lap_sec'].idxmin()
+        session_candidates.append((float(pr.loc[i, 'best_lap_sec']), str(pr.loc[i, 'name'])))
+
+    grid = getattr(wiz, 'grid_all_df', None)
+    if grid is not None and not grid.empty and 'best_lap_sec' in grid.columns:
+        valid = grid.dropna(subset=['best_lap_sec'])
+        if not valid.empty:
+            i = valid['best_lap_sec'].idxmin()
+            session_candidates.append((float(valid.loc[i, 'best_lap_sec']), str(valid.loc[i, 'name'])))
+
+    def _best(cands):
+        return min(cands, key=lambda c: c[0]) if cands else None
+
+    return {'race': _best(race_candidates), 'session': _best(session_candidates)}
+
+
 _FLAGS = Path(__file__).parent.parent.parent / 'data' / 'flags'
 
 # Wikipedia-style GP three-letter codes for the round headers
@@ -365,6 +393,7 @@ class ChampionshipPage(QWizardPage):
         wiz.all_race_pts  = []
         wiz.race_pts      = []
         wiz.race_results  = []
+        wiz.race_fastest_laps = []
         while wiz.currentId() not in (wiz.ID_CALENDAR, wiz.startId()):
             wiz.back()
         if wiz.currentId() == wiz.ID_CALENDAR:
@@ -378,8 +407,10 @@ class ChampionshipPage(QWizardPage):
         wiz.race_pts = []
         wiz.round_results.append({'circuit': wiz.circuit['circuit_name'],
                                   'country': wiz.circuit['country'],
-                                  'races': wiz.race_results})
+                                  'races': wiz.race_results,
+                                  'lap_records': _round_lap_records(wiz)})
         wiz.race_results = []
+        wiz.race_fastest_laps = []
         wiz.circuit_index += 1
 
     def _advance_round(self):
@@ -406,7 +437,8 @@ class ChampionshipPage(QWizardPage):
         if wiz.race_results:
             rounds.append({'circuit': wiz.circuit['circuit_name'],
                            'country': wiz.circuit['country'],
-                           'races': wiz.race_results})
+                           'races': wiz.race_results,
+                           'lap_records': _round_lap_records(wiz)})
         return rounds
 
     def _save_history(self):
@@ -472,7 +504,8 @@ class ChampionshipPage(QWizardPage):
                     })
                 races_out.append(race)
             rounds_detail.append({'circuit': str(rd['circuit']),
-                                  'country': str(rd['country']), 'races': races_out})
+                                  'country': str(rd['country']), 'races': races_out,
+                                  'lap_records': rd.get('lap_records')})
 
         entry = {
             'year':          wiz.season_year,

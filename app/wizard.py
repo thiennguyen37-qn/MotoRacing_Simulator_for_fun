@@ -99,6 +99,7 @@ class MotoWizard(QWizard):
         self.grid_all_df      = None
         self.race_pts         = []
         self.race_results     = []   # current round's per-race classifications
+        self.race_fastest_laps = []  # [(seconds, name), ...] one per race this round
 
         # Audio — created before pages so SoundtrackPage can receive the reference
         self._audio = AudioManager()

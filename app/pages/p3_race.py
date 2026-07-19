@@ -201,6 +201,8 @@ class RacePage(QWizardPage):
         self._wiz.race_pts.append(pts_df)
         self._wiz.race_results.append(
             result_df[['name', 'pos', 'dnf', 'fastest_lap', 'grid_pos']].copy())
+        if meta['fl_name'] is not None:
+            self._wiz.race_fastest_laps.append((meta['fl_time'], meta['fl_name']))
 
         table = self._t_r1 if race_num == 1 else self._t_r2
         reveal = _fill(table, result_df, meta)

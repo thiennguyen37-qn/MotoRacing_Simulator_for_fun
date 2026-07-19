@@ -8,7 +8,7 @@ from PyQt6.QtGui import (QFont, QPainter, QColor, QPixmap, QPainterPath,
                           QLinearGradient, QPen)
 from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint,
                           pyqtSignal, QPropertyAnimation, QParallelAnimationGroup,
-                          QEasingCurve, QAbstractAnimation)
+                          QSequentialAnimationGroup, QEasingCurve, QAbstractAnimation)
 
 from app.pages.p_gallery import STATS, _make_scroll_area, _BIKES_DIR, _BIKE_IMAGE
 from app.pages.p_calendar import _SlotBar
@@ -18,6 +18,7 @@ from app.pages.p_history import (_aggregate_riders, _build_rider_race_matrix,
                                   _flag_pixmap, _season_tables_data, _honours_data)
 from app.widgets.table_utils import TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR, row_bg
 from src.simulator import POINTS
+from src.engine import fmt_lap
 
 
 def _big_bike_pixmap(team_name: str, height: int = 200):
@@ -745,6 +746,61 @@ def _stats_from_rounds_detail(rounds_detail_list: list) -> dict:
     return stats
 
 
+def _track_history(seasons_for_rec: list, circuit_name: str | None, limit: int = 5) -> tuple:
+    """(winners, polesitters) at `circuit_name` across every season on
+    record (archived + the live in-progress one folded into
+    `seasons_for_rec`, oldest to newest) — each a (year, name) tuple, most
+    recent first, capped to `limit`.
+
+    Winners are read per-race (a round can run more than one race, each
+    with its own winner); poles are read once per round from its first
+    race only, mirroring _stats_from_rounds_detail's own rule against
+    double-counting a round's shared grid."""
+    if not circuit_name:
+        return [], []
+    winners, poles = [], []
+    for season in sorted(seasons_for_rec, key=lambda s: s.get('year', 0)):
+        year = season.get('year', '')
+        for rnd in season.get('rounds_detail') or []:
+            if str(rnd.get('circuit', '')) != circuit_name:
+                continue
+            races = rnd.get('races', [])
+            for race in races:
+                winner = next((r for r in race if not r.get('dnf') and int(r.get('pos', 0)) == 1), None)
+                if winner is not None:
+                    winners.append((year, winner['name']))
+            if races:
+                pole = next((r for r in races[0] if r.get('pole')), None)
+                if pole is not None:
+                    poles.append((year, pole['name']))
+    return winners[-limit:][::-1], poles[-limit:][::-1]
+
+
+def _track_records(seasons_for_rec: list, circuit_name: str | None) -> tuple:
+    """(brlc, blc) at `circuit_name` across every recorded round — each a
+    (seconds, name, year) tuple, or None if this track has no lap-record
+    data yet (older history predates lap-time tracking, or it simply
+    hasn't been raced this career). BRLC is the fastest lap set in either
+    race; BLC also considers Practice and Qualifying — see
+    p4_championship._round_lap_records, which computes both per round."""
+    if not circuit_name:
+        return None, None
+    brlc, blc = None, None
+    for season in seasons_for_rec:
+        year = season.get('year', '')
+        for rnd in season.get('rounds_detail') or []:
+            if str(rnd.get('circuit', '')) != circuit_name:
+                continue
+            lr = rnd.get('lap_records') or {}
+            race = lr.get('race')
+            if race is not None and (brlc is None or race[0] < brlc[0]):
+                brlc = (race[0], race[1], year)
+            session = lr.get('session')
+            if session is not None and (blc is None or session[0] < blc[0]):
+                blc = (session[0], session[1], year)
+    return brlc, blc
+
+
 def _rider_position_trend(rounds_detail_list: list, name: str) -> list:
     """(label, position-or-None) per race in calendar order for the line
     chart — None marks a DNF (no finishing position to plot)."""
@@ -873,16 +929,19 @@ def _play_transition(owner: QWidget, container: QWidget, snapshot: tuple, kind: 
     before the caller rebuilt `container`'s content (which by now is
     already showing the new content, sitting at its normal resting spot):
 
-    - kind='scroll': the outgoing snapshot pops up a *little* (a small
-      _SCROLL_NUDGE, not a full page-height) while fading out, and the
+    Both kinds run in two sequential phases (old page fades fully out,
+    then the new page fades in) — never a crossfade, so no frame ever
+    shows both pages' text at once:
+
+    - kind='scroll': the outgoing snapshot also pops up a *little* (a
+      small _SCROLL_NUDGE, not a full page-height) as it fades, and the
       incoming `container` mirrors it — starts nudged slightly below rest
       and eases up while fading in. A full-height traverse read as the page
       being "flung" off-screen; this keeps the same up-and-out direction
       as a hint of scrolling without the large travel. Used for paging
       within the same standings category (top 5 -> next 5 -> ...).
-    - kind='fade': the outgoing snapshot cross-dissolves in place, no
-      movement at all — used when the category itself changes (e.g.
-      Riders -> Teams).
+    - kind='fade': no movement at all — used when the category itself
+      changes (e.g. Riders -> Teams).
 
     `owner` just needs to outlive the animation to keep it alive (Python
     would otherwise garbage-collect the QPropertyAnimation/group as soon as
@@ -891,6 +950,22 @@ def _play_transition(owner: QWidget, container: QWidget, snapshot: tuple, kind: 
     old_pixmap, old_geometry = snapshot
     if old_pixmap.isNull():
         return
+    # A still-running previous transition would leave its overlay/effects
+    # on screen while this one stacks its own on top. Qt's stop() does NOT
+    # emit finished() for an animation halted mid-flight, so cleanup can't
+    # ride on that signal alone — the previous transition's cleanup closure
+    # is kept on the owner and invoked explicitly here.
+    prev = getattr(owner, '_active_transition', None)
+    if prev is not None:
+        try:
+            if prev.state() == QAbstractAnimation.State.Running:
+                prev.stop()
+        except RuntimeError:
+            pass   # DeleteWhenStopped already tore the C++ object down
+    prev_cleanup = getattr(owner, '_transition_cleanup', None)
+    if prev_cleanup is not None:
+        prev_cleanup()
+
     parent = container.parentWidget()
     overlay = QLabel(parent)
     overlay.setPixmap(old_pixmap)
@@ -898,52 +973,89 @@ def _play_transition(owner: QWidget, container: QWidget, snapshot: tuple, kind: 
     overlay.show()
     overlay.raise_()
 
+    # Sequential, not a crossfade: the old page fades fully OUT before the
+    # new one fades in. A crossfade draws both pages at once for its whole
+    # duration, and any screenshot/glance mid-swap reads as the panel's
+    # text being garbled/overlapping — with the half-and-half phasing there
+    # is no frame in which two sets of rows are visible together.
+    half = _TRANSITION_MS // 2
+
     out_effect = QGraphicsOpacityEffect(overlay)
     overlay.setGraphicsEffect(out_effect)
     out_fade = QPropertyAnimation(out_effect, b'opacity', overlay)
-    out_fade.setDuration(_TRANSITION_MS)
+    out_fade.setDuration(half)
     out_fade.setStartValue(1.0)
     out_fade.setEndValue(0.0)
 
-    group = QParallelAnimationGroup(owner)
-    group.addAnimation(out_fade)
+    # The container (already holding the new page) starts invisible for
+    # phase 1 either way; phase 2 fades it in.
+    in_effect = QGraphicsOpacityEffect(container)
+    container.setGraphicsEffect(in_effect)
+    in_effect.setOpacity(0.0)
+    in_fade = QPropertyAnimation(in_effect, b'opacity', container)
+    in_fade.setDuration(half)
+    in_fade.setStartValue(0.0)
+    in_fade.setEndValue(1.0)
+
+    phase_out = QParallelAnimationGroup()
+    phase_out.addAnimation(out_fade)
+    phase_in = QParallelAnimationGroup()
+    phase_in.addAnimation(in_fade)
 
     if kind == 'scroll':
         out_move = QPropertyAnimation(overlay, b'pos', overlay)
-        out_move.setDuration(_TRANSITION_MS)
+        out_move.setDuration(half)
         out_move.setStartValue(overlay.pos())
         out_move.setEndValue(overlay.pos() - QPoint(0, _SCROLL_NUDGE))
         out_move.setEasingCurve(QEasingCurve.Type.OutCubic)
-        group.addAnimation(out_move)
-
-        in_effect = QGraphicsOpacityEffect(container)
-        container.setGraphicsEffect(in_effect)
-        in_effect.setOpacity(0.0)
-        in_fade = QPropertyAnimation(in_effect, b'opacity', container)
-        in_fade.setDuration(_TRANSITION_MS)
-        in_fade.setStartValue(0.0)
-        in_fade.setEndValue(1.0)
-        group.addAnimation(in_fade)
+        phase_out.addAnimation(out_move)
 
         settled_pos = container.pos()
         container.move(settled_pos + QPoint(0, _SCROLL_NUDGE))
         in_move = QPropertyAnimation(container, b'pos', container)
-        in_move.setDuration(_TRANSITION_MS)
+        in_move.setDuration(half)
         in_move.setStartValue(container.pos())
         in_move.setEndValue(settled_pos)
         in_move.setEasingCurve(QEasingCurve.Type.OutCubic)
-        group.addAnimation(in_move)
+        phase_in.addAnimation(in_move)
 
-        group.finished.connect(lambda: container.setGraphicsEffect(None))
+    group = QSequentialAnimationGroup(owner)
+    group.addAnimation(phase_out)
+    group.addAnimation(phase_in)
 
-    group.finished.connect(overlay.deleteLater)
+    _done = [False]
+
+    def _cleanup():
+        # Idempotent: runs on natural finish AND when the next transition
+        # interrupts this one (see prev_cleanup above) — whichever first.
+        if _done[0]:
+            return
+        _done[0] = True
+        container.setGraphicsEffect(None)
+        overlay.deleteLater()
+        # An interrupted scroll phase can leave the container displaced by
+        # its nudge; reasserting the layout snaps it back to rest.
+        p = container.parentWidget()
+        if p is not None and p.layout() is not None:
+            p.layout().activate()
+        # Drop the owner's refs if they still point at this transition, so
+        # the next one doesn't poke a C++ object DeleteWhenStopped already
+        # destroyed.
+        if getattr(owner, '_transition_cleanup', None) is _cleanup:
+            owner._transition_cleanup = None
+            owner._active_transition = None
+
+    group.finished.connect(_cleanup)
+    owner._transition_cleanup = _cleanup
     owner._active_transition = group   # keep a live Python reference until done
     group.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
-def _panel_title(text: str) -> QWidget:
-    """A dashboard panel's heading: centred, with a divider marking where
-    the title ends and the panel's own content begins."""
+def _panel_title_parts(text: str) -> tuple:
+    """(widget, label) of a dashboard panel's heading: centred, with a
+    divider marking where the title ends and the panel's content begins.
+    Callers that relabel the heading as the panel cycles categories keep
+    the returned label; the rest use _panel_title() for just the widget."""
     w = QWidget()
     w.setStyleSheet('background: transparent;')
     lay = QVBoxLayout(w)
@@ -960,7 +1072,11 @@ def _panel_title(text: str) -> QWidget:
     line.setFixedHeight(1)
     line.setStyleSheet('background: rgba(255,255,255,60); border:none;')
     lay.addWidget(line)
-    return w
+    return w, lbl
+
+
+def _panel_title(text: str) -> QWidget:
+    return _panel_title_parts(text)[0]
 
 
 class _StandingsPanel(QWidget):
@@ -981,29 +1097,12 @@ class _StandingsPanel(QWidget):
         lay.setContentsMargins(14, 10, 14, 12)
         lay.setSpacing(0)
 
-        lay.addWidget(_panel_title('STANDINGS'))
+        # Category now rides in the title (e.g. "RIDER STANDINGS") since the
+        # column-header row was removed — otherwise the panel would cycle
+        # riders -> teams -> manufacturers with nothing saying which.
+        title_w, self._title_lbl = _panel_title_parts('STANDINGS')
+        lay.addWidget(title_w)
         lay.addItem(_soft_gap(10))
-
-        header = QWidget()
-        header.setStyleSheet('background: transparent;')
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(10, 0, 10, 0)
-        hl.setSpacing(8)
-        pos_h = QLabel('POS'); pos_h.setFixedWidth(24)
-        self._name_h = QLabel(self._MODES[0])
-        pts_h = QLabel('PTS'); pts_h.setFixedWidth(44)
-        # AlignRight alone REPLACES QLabel's default vertical centring —
-        # without an explicit AlignVCenter the text is drawn from the top
-        # and its lower half gets clipped whenever the row is squeezed.
-        pts_h.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        for l in (pos_h, self._name_h, pts_h):
-            l.setFont(QFont('Segoe UI', 7, QFont.Weight.Bold))
-            l.setStyleSheet('color:#ffffff; letter-spacing:1px; background:transparent; border:none;')
-        hl.addWidget(pos_h)
-        hl.addWidget(self._name_h, 1)
-        hl.addWidget(pts_h)
-        lay.addWidget(header)
-        lay.addItem(_soft_gap(6))
 
         self._rows_holder = QWidget()
         self._rows_holder.setStyleSheet('background: transparent;')
@@ -1052,7 +1151,7 @@ class _StandingsPanel(QWidget):
 
     def _render(self, transition: str | None = None):
         mode = self._MODES[self._mode_index]
-        self._name_h.setText(mode)
+        self._title_lbl.setText(f'{mode} STANDINGS')
         standings = self._by_mode.get(mode, [])
         snapshot = _grab_snapshot(self._rows_holder) if transition else None
 
@@ -1267,14 +1366,251 @@ class _OverallStatsPanel(QWidget):
             _play_transition(self, self._board_holder, snapshot, 'fade')
 
 
-_HUB_SIDEBAR_W = 380   # compact right-hand column; the left side stays open for more sections
+_INFO_ROW_H = 22   # locked, same no-squeeze rule as the standings rows
+
+
+def _info_row(label: str) -> tuple:
+    """label:value line for _NextRacePanel's circuit-info/records block — a
+    small dim caption on the left, an eliding bold value on the right (a
+    long circuit name or a "time — HOLDER — year" record string both need
+    to shrink gracefully instead of overrunning the card). The caption
+    keeps its natural width (a fixed one clipped "LONGEST STRAIGHT" mid-
+    word) and the row's height is locked so a squeezed column clips the
+    card's bottom edge cleanly instead of mashing lines into each other."""
+    row = QWidget()
+    row.setStyleSheet('background: transparent;')
+    row.setFixedHeight(_INFO_ROW_H)
+    rl = QHBoxLayout(row)
+    rl.setContentsMargins(0, 0, 0, 0)
+    rl.setSpacing(8)
+    lbl = QLabel(label)
+    lbl.setFont(QFont('Segoe UI', 8, QFont.Weight.Bold))
+    lbl.setStyleSheet('color:#9a9ab2; letter-spacing:1px; background:transparent; border:none;')
+    val = _ElideLabel()
+    val.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
+    val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    val.setStyleSheet('color:#ffffff; background:transparent; border:none;')
+    rl.addWidget(lbl)
+    rl.addWidget(val, 1)
+    return row, val
+
+
+def _fmt_record(rec: tuple | None) -> str:
+    """(seconds, name, year) -> 'MM:SS.mmm — HOLDER NAME — year', or '—'
+    before this track has any lap-record data on file."""
+    if rec is None:
+        return '—'
+    sec, name, year = rec
+    return f'{fmt_lap(sec)} — {str(name).upper()} — {year}'
+
+
+class _NextRacePanel(QWidget):
+    """Top-left card: the upcoming round's title and national flag, a
+    second divider (border2), then the circuit's vitals and its two
+    all-time lap records — the same divider-under-heading look every
+    other dashboard panel uses (via _panel_title), just with a flag and a
+    stat block standing in for a row list."""
+
+    _FLAG_H = 64
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 14, 14, 14)
+        lay.setSpacing(0)
+
+        self._title_holder = QWidget()
+        self._title_holder.setStyleSheet('background: transparent;')
+        self._title_lay = QVBoxLayout(self._title_holder)
+        self._title_lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._title_holder)
+        lay.addItem(_soft_gap(12))
+
+        self._flag_lbl = QLabel()
+        self._flag_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._flag_lbl.setFixedHeight(self._FLAG_H)
+        lay.addWidget(self._flag_lbl)
+        lay.addItem(_soft_gap(12))
+
+        border2 = QFrame()
+        border2.setFixedHeight(1)
+        border2.setStyleSheet('background: rgba(255,255,255,60); border:none;')
+        lay.addWidget(border2)
+        lay.addItem(_soft_gap(10))
+
+        info_holder = QWidget()
+        info_holder.setStyleSheet('background: transparent;')
+        info_lay = QVBoxLayout(info_holder)
+        info_lay.setContentsMargins(0, 0, 0, 0)
+        info_lay.setSpacing(6)
+        self._circuit_row, self._circuit_val = _info_row('CIRCUIT')
+        self._length_row, self._length_val = _info_row('LENGTH')
+        self._corners_row, self._corners_val = _info_row('CORNERS')
+        self._straight_row, self._straight_val = _info_row('LONGEST STRAIGHT')
+        for row in (self._circuit_row, self._length_row, self._corners_row, self._straight_row):
+            info_lay.addWidget(row)
+        lay.addWidget(info_holder)
+        lay.addItem(_soft_gap(10))
+
+        records_holder = QWidget()
+        records_holder.setStyleSheet('background: transparent;')
+        records_lay = QVBoxLayout(records_holder)
+        records_lay.setContentsMargins(0, 0, 0, 0)
+        records_lay.setSpacing(6)
+        self._brlc_row, self._brlc_val = _info_row('BEST RACE LAP')
+        self._blc_row, self._blc_val = _info_row('ALL TIME LAP RECORD')
+        records_lay.addWidget(self._brlc_row)
+        records_lay.addWidget(self._blc_row)
+        lay.addWidget(records_holder)
+        lay.addStretch(1)
+
+    def load(self, circuit_row, brlc: tuple | None = None, blc: tuple | None = None):
+        while self._title_lay.count():
+            item = self._title_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+
+        country = str(circuit_row['country']) if circuit_row is not None else ''
+        title = f'GRAND PRIX OF {country.upper()}' if country else 'OFF-SEASON'
+        self._title_lay.addWidget(_panel_title(title))
+
+        pix = _flag_pixmap(country, height=self._FLAG_H) if country else None
+        self._flag_lbl.setPixmap(pix if pix is not None else QPixmap())
+
+        if circuit_row is not None:
+            self._circuit_val.setFullText(str(circuit_row['circuit_name']).upper())
+            self._length_val.setFullText(f"{float(circuit_row['lap_length_km']):.2f} KM")
+            self._corners_val.setFullText(str(int(circuit_row['corners'])))
+            self._straight_val.setFullText(f"{int(circuit_row['straight_length_m'])} M")
+        else:
+            for val in (self._circuit_val, self._length_val, self._corners_val, self._straight_val):
+                val.setFullText('—')
+
+        self._brlc_val.setFullText(_fmt_record(brlc))
+        self._blc_val.setFullText(_fmt_record(blc))
+
+
+class _TrackHistoryPanel(QWidget):
+    """Bottom-left card: mirrors _StandingsPanel's structure and animation
+    exactly (static panel title, a header row whose label swaps in place,
+    animated rows below) — cycling every 5s between this circuit's last 5
+    winners and its last 5 polesitters. Both lists are already capped to 5
+    entries by _track_history, so unlike Standings there's never a second
+    page to scroll through; every cycle is a category fade, never a scroll."""
+
+    _MODES = ['LAST 5 WINNERS', 'LAST 5 POLESITTERS']
+    _SLOTS = 5
+    _CYCLE_MS = 5000
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 12)
+        lay.setSpacing(0)
+
+        # The mode names are self-describing, so with the column-header row
+        # gone they become the panel title outright (no separate "TRACK
+        # HISTORY" line) — it swaps between the two as the panel cycles.
+        title_w, self._title_lbl = _panel_title_parts(self._MODES[0])
+        lay.addWidget(title_w)
+        lay.addItem(_soft_gap(10))
+
+        self._rows_holder = QWidget()
+        self._rows_holder.setStyleSheet('background: transparent;')
+        self._rows_lay = QVBoxLayout(self._rows_holder)
+        self._rows_lay.setContentsMargins(0, 0, 0, 0)
+        self._rows_lay.setSpacing(8)
+        lay.addWidget(self._rows_holder)
+        lay.addStretch(1)
+
+        self._by_mode = {}
+        self._names_map = {}
+        self._mode_index = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(self._CYCLE_MS)
+        self._timer.timeout.connect(self._advance)
+        self._timer.start()
+
+    def load(self, winners: list, polesitters: list, names_map: dict | None = None):
+        self._by_mode = {'LAST 5 WINNERS': winners, 'LAST 5 POLESITTERS': polesitters}
+        self._names_map = names_map or {}
+        self._mode_index = 0
+        self._render()
+
+    def _advance(self):
+        if not self._by_mode:
+            return
+        self._mode_index = (self._mode_index + 1) % len(self._MODES)
+        self._render('fade')
+
+    def _render(self, transition: str | None = None):
+        mode = self._MODES[self._mode_index]
+        self._title_lbl.setText(mode)
+        entries = self._by_mode.get(mode, [])
+        snapshot = _grab_snapshot(self._rows_holder) if transition else None
+
+        while self._rows_lay.count():
+            item = self._rows_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+
+        for i in range(self._SLOTS):
+            row = QFrame()
+            # _MINI_ROW_H, not _DASH_ROW_H: five 30px rows plus the Next
+            # Race card above pushed the left column past what a
+            # 150%-scaled 1080p screen can show, and the resulting squeeze
+            # mashed the cards' text together.
+            row.setFixedHeight(_MINI_ROW_H)
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(10, 0, 10, 0)
+            rl.setSpacing(8)
+            name_lbl = _ElideLabel()
+            manu_lbl = _ElideLabel(); manu_lbl.setFixedWidth(100)
+            year_lbl = QLabel(); year_lbl.setFixedWidth(44)
+            year_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            for l in (name_lbl, manu_lbl, year_lbl):
+                l.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+
+            if i < len(entries):
+                year, name = entries[i]
+                info = self._names_map.get(name, {})
+                color = TEAM_COLOR.get(info.get('team', '')) or MANU_COLOR.get(
+                    info.get('manufacturer', ''), _DEFAULT_COLOR)
+                row.setStyleSheet(f'background: {row_bg(color).name()}; border-radius: 6px; border: none;')
+                text_color = '#ffffff'
+                name_lbl.setFullText(str(name).upper())
+                manu_lbl.setFullText(str(info.get('manufacturer', '—')).upper())
+                year_lbl.setText(str(year))
+            else:
+                row.setStyleSheet('background: rgba(255,255,255,10); border-radius: 6px; border: none;')
+                text_color = '#5a5a72'
+                name_lbl.setFullText('—')
+                manu_lbl.setFullText('—')
+
+            for l in (name_lbl, manu_lbl, year_lbl):
+                l.setStyleSheet(f'color:{text_color}; background:transparent; border:none;')
+            rl.addWidget(name_lbl, 1)
+            rl.addWidget(manu_lbl)
+            rl.addWidget(year_lbl)
+            self._rows_lay.addWidget(row)
+
+        if transition:
+            _play_transition(self, self._rows_holder, snapshot, transition)
+
+
+_HUB_SIDEBAR_W = 380   # compact right-hand column
+_HUB_LEFT_W = 460      # left column runs a bit wider — room for the circuit-info lines
 
 
 class _HubDashboard(QWidget):
-    """Sits below the main hub's tab bar as a single compact column, pinned
-    to the right: standings, then overall stats, then recent form below
-    it — leaving the whole left side of the screen open for future
-    sections instead of spreading across the full width."""
+    """Sits below the main hub's tab bar as two compact columns: the next
+    round's title/flag and this circuit's track history pinned to the
+    left, standings/overall-stats/recent-form pinned to the right — with
+    the wide gap between them left open to show the background art."""
 
     def __init__(self):
         super().__init__()
@@ -1282,6 +1618,34 @@ class _HubDashboard(QWidget):
         outer = QHBoxLayout(self)
         outer.setContentsMargins(56, 0, 56, 40)
         outer.setSpacing(0)
+
+        left = QWidget()
+        left.setFixedWidth(_HUB_LEFT_W)
+        left.setStyleSheet('background: transparent;')
+        left_lay = QVBoxLayout(left)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(12)
+
+        self._next_race = _NextRacePanel()
+        self._track_history = _TrackHistoryPanel()
+        left_panels = (self._next_race, self._track_history)
+        for i, panel in enumerate(left_panels):
+            wrap = _TintWrap(panel, margin=0)
+            # The last card (Track History) expands to soak up whatever
+            # height its column has to spare, instead of a trailing stretch
+            # leaving a gap below it — that's what pins its bottom edge
+            # level with Recent Form's, the last card on the right.
+            v_policy = (QSizePolicy.Policy.Expanding if i == len(left_panels) - 1
+                       else QSizePolicy.Policy.Maximum)
+            wrap.setSizePolicy(QSizePolicy.Policy.Preferred, v_policy)
+            left_lay.addWidget(wrap)
+        outer.addWidget(left)
+
+        # Open gap in the middle (background art shows through). left(460) +
+        # right(380) + the 56+56 side margins == 952 < the window's 1060
+        # minimum width, so this stretch is always at least ~108px — the two
+        # columns can never touch, let alone overlap. (The overlap before was
+        # the since-removed middle tiles forcing extra width in here.)
         outer.addStretch(1)
 
         right = QWidget()
@@ -1294,27 +1658,34 @@ class _HubDashboard(QWidget):
         self._standings = _StandingsPanel()
         self._overall_stats = _OverallStatsPanel()
         self._form = _FormPanel()
-        for panel in (self._standings, self._overall_stats, self._form):
+        right_panels = (self._standings, self._overall_stats, self._form)
+        for i, panel in enumerate(right_panels):
             wrap = _TintWrap(panel, margin=0)
             # Maximum: a card may shrink below its natural height — its
             # internal _soft_gap()s collapse first, so rows stay intact —
-            # but never grows past it (the trailing stretch takes surplus).
-            # A hard Fixed policy here forced Qt to clip card bottoms
-            # instead, cutting through the last row.
-            wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+            # but never grows past it on its own. A hard Fixed policy here
+            # forced Qt to clip card bottoms instead, cutting through the
+            # last row. The last card (Recent Form) is Expanding instead,
+            # so it — not a trailing stretch — absorbs the column's
+            # leftover height, putting its bottom edge at the column's
+            # bottom rather than short of it.
+            v_policy = (QSizePolicy.Policy.Expanding if i == len(right_panels) - 1
+                       else QSizePolicy.Policy.Maximum)
+            wrap.setSizePolicy(QSizePolicy.Policy.Preferred, v_policy)
             right_lay.addWidget(wrap)
-        # Trailing stretch keeps the stack pinned to the top when the column
-        # has height to spare.
-        right_lay.addStretch(1)
 
         outer.addWidget(right)
 
     def load(self, standings: list, races: list, honours: dict | None,
             team_standings: list, manu_standings: list,
-            names_map: dict | None = None):
+            names_map: dict | None = None, next_circuit=None,
+            track_winners: list | None = None, track_polesitters: list | None = None,
+            brlc: tuple | None = None, blc: tuple | None = None):
         self._standings.load(standings, team_standings, manu_standings)
         self._form.load(races)
         self._overall_stats.load(honours, names_map)
+        self._next_race.load(next_circuit, brlc, blc)
+        self._track_history.load(track_winners or [], track_polesitters or [], names_map)
 
 
 # ── Season Stats tab: STANDINGS / YOUR RESULT (same sub-hub pattern as
@@ -1632,7 +2003,18 @@ class SeasonHubPage(QWizardPage):
         hub_page_lay.setSpacing(0)
         hub_page_lay.addWidget(self._hub)
         hub_page_lay.addSpacing(30)
-        hub_page_lay.addWidget(self._hub_dashboard, 1)
+        # The dashboard sits inside a scroll area because a window shorter
+        # than its ~650px minimum makes a bare layout squeeze children
+        # BELOW their fixed heights ("take from the biggest first"),
+        # collapsing gaps and clipping card rows mid-glyph. The scroll area
+        # never renders its widget under the widget's minimum size — a
+        # too-short window shows the same thin scrollbar the Calendar uses,
+        # with every card intact. (This was in once before and got reverted
+        # over ghosting that turned out to be _play_transition leaking
+        # overlays when interrupted — that leak is fixed separately now.)
+        self._dash_scroll = _make_scroll_area()
+        self._dash_scroll.setWidget(self._hub_dashboard)
+        hub_page_lay.addWidget(self._dash_scroll, 1)
         self._stack.addWidget(self._wrap(hub_page))               # 1
 
         self._profile = _ProfileScreen()
@@ -1702,7 +2084,7 @@ class SeasonHubPage(QWizardPage):
                     })
                 races_out.append(race)
             rounds_detail.append({'circuit': str(rd['circuit']), 'country': str(rd['country']),
-                                  'races': races_out})
+                                  'races': races_out, 'lap_records': rd.get('lap_records')})
         return rounds_detail
 
     def _refresh_data(self):
@@ -1765,10 +2147,26 @@ class SeasonHubPage(QWizardPage):
         manu_standings = ([{'name': m, 'points': data['manu_total'][m]} for m in data['manu_sorted']]
                           if data is not None else [])
 
+        # circuit_index always points at the round about to be played next
+        # (see p4_championship.ChampionshipPage._bank_round() incrementing
+        # it right after a round is banked), so it's valid whether the hub
+        # is opened fresh pre-season or reopened mid-season via resume_at_hub().
+        season_df = self._wiz.season_df
+        next_row = (season_df.iloc[self._wiz.circuit_index]
+                    if season_df is not None and 0 <= self._wiz.circuit_index < len(season_df)
+                    else None)
+        next_circuit_name = str(next_row['circuit_name']) if next_row is not None else None
+        track_winners, track_polesitters = _track_history(seasons_for_rec, next_circuit_name)
+        brlc, blc = _track_records(seasons_for_rec, next_circuit_name)
+
         trend = _rider_position_trend(current_rounds_detail or [], name or '')
         self._hub_dashboard.load(standings, recent_races, honours,
                                  team_standings, manu_standings,
-                                 data['names'] if data is not None else {})
+                                 data['names'] if data is not None else {},
+                                 next_circuit=next_row,
+                                 track_winners=track_winners,
+                                 track_polesitters=track_polesitters,
+                                 brlc=brlc, blc=blc)
         self._season_stats_screen.load(standings, name or '', honours, trend)
 
         self._calendar.load(self._wiz.season_df)
@@ -1826,6 +2224,12 @@ class SeasonHubPage(QWizardPage):
             if key in (K.Key_Left, K.Key_Right):
                 self._hub_focus = (self._hub_focus + (1 if key == K.Key_Right else -1)) % 5
                 self._sync_hub_focus()
+            elif key in (K.Key_Up, K.Key_Down):
+                # No-op unless the window is short enough that the
+                # dashboard's scrollbar has kicked in.
+                bar = self._dash_scroll.verticalScrollBar()
+                if bar is not None:
+                    bar.setValue(bar.value() + (-60 if key == K.Key_Up else 60))
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
                 (self._go_next, self._open_profile, self._open_calendar,
                  self._open_season_stats_screen, self._confirm_main_menu)[self._hub_focus]()

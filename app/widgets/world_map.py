@@ -13,9 +13,19 @@ from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MplPath
 import matplotlib.image as mpimg
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
-from PyQt6.QtGui import QFont
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QStackedWidget
+from PyQt6.QtGui import QFont, QPixmap, QPainter
+from PyQt6.QtCore import Qt, QThread, QTimer, QRectF, QCoreApplication, pyqtSignal
+
+# Single high-res capture used by fly_to()'s pan/zoom — its figure-inches
+# width (6, see Figure(figsize=...) below) times this DPI.
+_FLY_CAPTURE_DPI = 480
+# Extra fractional padding added around highlight()'s normal (tight) zoom for
+# fly_to()'s landing — a full-screen transition needs more breathing room
+# around the destination than the small Calendar/Circuit map panel does, so
+# this is applied on top of _pad() rather than changing it (which those pages
+# still rely on for their own, tighter zoom).
+_FLY_END_PAD_MULT = 1.0
 
 _GEOJSON  = Path(__file__).parent.parent.parent / 'data' / 'world_countries.geojson'
 _FLAG_DIR = Path(__file__).parent.parent.parent / 'data' / 'flags'
@@ -103,6 +113,146 @@ class _Loader(QThread):
         self.ready.emit(world)
 
 
+# ── background fly_to() capture ───────────────────────────────────────────────
+# Free functions (no `self`) so the capture can run on a worker thread without
+# touching WorldMapWidget's own Figure/Axes/canvas — those stay the main
+# thread's alone, so a background capture can't race a concurrent highlight().
+
+def _draw_flag_on(ax, world, iso2_map: dict, country_name: str) -> None:
+    """Draw `country_name`'s flag, clipped to its shape, onto `ax` — the same
+    look as WorldMapWidget._draw_flag, standalone so _capture_flight_png can
+    build a throwaway Figure for a background capture."""
+    iso2 = iso2_map.get(country_name, '')
+    if not iso2 or iso2 == '-99':
+        return
+    flag_img = _fetch_flag(iso2)
+    if flag_img is None:
+        return
+    rows = world[world['ADMIN'] == country_name]
+    if rows.empty:
+        return
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        areas     = rows.geometry.area
+        max_area  = areas.max()
+        main_geom = rows.loc[areas.idxmax(), 'geometry']
+        dists     = rows.geometry.apply(lambda g: main_geom.distance(g))
+        rows = rows[(areas >= max_area * 0.001) & (dists < 1_000_000)]
+    if rows.empty:
+        return
+    union_geom = unary_union(list(rows.geometry))
+    b          = rows.geometry.total_bounds
+
+    bw, bh = b[2] - b[0], b[3] - b[1]
+    cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+    img_h, img_w = flag_img.shape[:2]
+    img_aspect   = img_w / img_h
+    if max(bw, bh) < 600_000:
+        fw, fh = bw, bh
+    elif bw / bh >= img_aspect:
+        fw, fh = bw, bw / img_aspect
+    else:
+        fw, fh = bh * img_aspect, bh
+
+    im = ax.imshow(
+        flag_img, extent=[cx - fw/2, cx + fw/2, cy - fh/2, cy + fh/2],
+        aspect='auto', origin='upper', zorder=4, alpha=0.88,
+        interpolation='bilinear',
+    )
+    mpl_path = _shapely_to_mpl_path(union_geom)
+    clip = PathPatch(mpl_path, transform=ax.transData,
+                     facecolor='none', edgecolor='none', visible=False)
+    ax.add_patch(clip)
+    im.set_clip_path(clip)
+    outline = PathPatch(mpl_path, transform=ax.transData,
+                        facecolor='none', edgecolor=BORDER,
+                        linewidth=0.8, zorder=5)
+    ax.add_patch(outline)
+
+
+def _capture_flight_png(world, iso2_map: dict, box: tuple,
+                        from_country: str, to_country: str, dpi: int) -> bytes:
+    """Render `box` (x0,x1,y0,y1) with both countries flagged, to PNG bytes —
+    builds its own throwaway Figure/Axes so it's safe to call from a
+    background thread (see _FlyCaptureThread)."""
+    fig = Figure(figsize=(6, 3.6), dpi=100)
+    fig.patch.set_facecolor(BG)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_facecolor(OCEAN)
+    ax.set_axis_off()
+    world.plot(ax=ax, color=LAND, edgecolor=BORDER, linewidth=0.6)
+    _draw_flag_on(ax, world, iso2_map, from_country)
+    _draw_flag_on(ax, world, iso2_map, to_country)
+    ax.set_xlim(box[0], box[1])
+    ax.set_ylim(box[2], box[3])
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=dpi, facecolor=fig.get_facecolor())
+    return buf.getvalue()
+
+
+class _FlyCaptureThread(QThread):
+    """Renders fly_to()'s wide-view capture off the main thread, via the free
+    functions above — kicked off ahead of time by preload_fly() so the
+    capture is normally already done by the time the player actually
+    triggers fly_to(), instead of blocking the UI while it renders."""
+
+    ready = pyqtSignal(tuple, bytes, tuple)   # (key, png_bytes, box)
+
+    def __init__(self, key, world, iso2_map, box, from_country, to_country, dpi):
+        super().__init__()
+        self._key = key
+        self._world = world
+        self._iso2_map = iso2_map
+        self._box = box
+        self._from = from_country
+        self._to = to_country
+        self._dpi = dpi
+
+    def run(self):
+        png = _capture_flight_png(self._world, self._iso2_map, self._box,
+                                  self._from, self._to, self._dpi)
+        self.ready.emit(self._key, png, self._box)
+
+
+class _FlyOverlay(QWidget):
+    """Displays a crop of a single pre-rendered high-res map capture, scaled
+    to fill the widget — used by fly_to() so its pan/zoom animation is a cheap
+    per-frame QPainter blit instead of a full matplotlib re-render (redrawing
+    the whole vector world map on every tick was what made the pan stutter)."""
+
+    def __init__(self):
+        super().__init__()
+        self._pixmap: QPixmap | None = None
+        self._data_box = None     # (x0, x1, y0, y1) the pixmap covers, EPSG:3857 m
+        self._view_box = None     # current (x0, x1, y0, y1) sub-rect to show
+
+    def set_image(self, pixmap: QPixmap, data_box: tuple):
+        self._pixmap = pixmap
+        self._data_box = data_box
+        self._view_box = data_box
+        self.update()
+
+    def set_view(self, x0: float, x1: float, y0: float, y1: float):
+        self._view_box = (x0, x1, y0, y1)
+        self.update()
+
+    def paintEvent(self, event):
+        if self._pixmap is None or self._data_box is None or self._view_box is None:
+            return
+        dx0, dx1, dy0, dy1 = self._data_box
+        vx0, vx1, vy0, vy1 = self._view_box
+        w, h = self._pixmap.width(), self._pixmap.height()
+        # Data y increases north/up; pixmap rows increase downward — flip.
+        px0 = (vx0 - dx0) / (dx1 - dx0) * w
+        px1 = (vx1 - dx0) / (dx1 - dx0) * w
+        py0 = (dy1 - vy1) / (dy1 - dy0) * h
+        py1 = (dy1 - vy0) / (dy1 - dy0) * h
+        source = QRectF(px0, py0, px1 - px0, py1 - py0)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.drawPixmap(QRectF(self.rect()), self._pixmap, source)
+
+
 # ── widget ────────────────────────────────────────────────────────────────────
 
 class WorldMapWidget(QWidget):
@@ -118,6 +268,11 @@ class WorldMapWidget(QWidget):
         self._flag_ims:    list = []
         self._flag_artists: list = []
         self._geom_cache:  dict = {}   # country → (union_geom, total_bounds)
+        self._fly_timer: QTimer | None = None
+        self._fly_active = False
+        self._fly_cache: dict | None = None            # {'key','pixmap','box'} — see preload_fly
+        self._fly_capture_thread: _FlyCaptureThread | None = None
+        self._fly_end_box: tuple | None = None          # current flight's landing box — see fly_to/fly_skip
 
         self._fig = Figure(figsize=(6, 3.6), dpi=100)
         self._fig.patch.set_facecolor(BG)
@@ -133,11 +288,19 @@ class WorldMapWidget(QWidget):
         self._loading_lbl.setStyleSheet('color: #444;')
         self._loading_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        # Three pages, one visible at a time: loading text, the interactive
+        # matplotlib canvas (normal highlight()/reset() use), and the fly-to
+        # overlay (a cheap pixmap blit swapped in only during fly_to()'s
+        # animation, then swapped back out).
+        self._fly_overlay = _FlyOverlay()
+        self._pages = QStackedWidget()
+        self._pages.addWidget(self._loading_lbl)   # 0
+        self._pages.addWidget(self._canvas)        # 1
+        self._pages.addWidget(self._fly_overlay)    # 2
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._loading_lbl)
-        layout.addWidget(self._canvas)
-        self._canvas.hide()
+        layout.addWidget(self._pages)
 
         self._loader = _Loader()
         self._loader.ready.connect(self._on_loaded)
@@ -185,8 +348,7 @@ class WorldMapWidget(QWidget):
         self._label.set_visible(False)
 
         self._canvas.draw()
-        self._loading_lbl.hide()
-        self._canvas.show()
+        self._pages.setCurrentWidget(self._canvas)
 
         if self._pending:
             self.highlight(self._pending)
@@ -278,11 +440,17 @@ class WorldMapWidget(QWidget):
 
     # ── public ────────────────────────────────────────────────────────────────
 
-    def highlight(self, country_name: str):
+    def highlight(self, country_name: str, box: tuple | None = None):
+        """Zoom to `country_name`, drawing its flag. `box` overrides the
+        normal tight _pad()-based zoom with a caller-supplied (x0,x1,y0,y1) —
+        used by fly_to() to land exactly on the wider framing its animation
+        eased into, instead of snapping to the tighter default the instant it
+        finishes."""
         if self._world is None:
             self._pending = country_name
             return
 
+        self._pages.setCurrentWidget(self._canvas)   # in case fly_to() left the overlay showing
         self._active = country_name
 
         if self._collection is not None:
@@ -303,16 +471,203 @@ class WorldMapWidget(QWidget):
                 warnings.simplefilter('ignore')
                 main = rows.loc[[rows.geometry.area.idxmax()]]
 
-            b   = main.geometry.total_bounds   # metres
-            pad = self._pad(b)
-            self._ax.set_xlim(b[0] - pad, b[2] + pad)
-            self._ax.set_ylim(b[1] - pad, b[3] + pad)
+            b = main.geometry.total_bounds   # metres
+            if box is not None:
+                x0, x1, y0, y1 = box
+            else:
+                pad = self._pad(b)
+                x0, x1, y0, y1 = b[0] - pad, b[2] + pad, b[1] - pad, b[3] + pad
+            self._ax.set_xlim(x0, x1)
+            self._ax.set_ylim(y0, y1)
 
             self._label.set_position(((b[0]+b[2])/2, (b[1]+b[3])/2))
             self._label.set_text(country_name)
             self._label.set_visible(True)
 
         self._canvas.draw_idle()
+
+    def _country_box(self, country_name: str):
+        """(x0, x1, y0, y1) padded view bounds for a country's mainland
+        polygon, in EPSG:3857 metres — the same box highlight() zooms to.
+        None if the country isn't in the loaded geometry."""
+        rows = self._world[self._world['ADMIN'] == country_name]
+        if rows.empty:
+            return None
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            main = rows.loc[[rows.geometry.area.idxmax()]]
+        b = main.geometry.total_bounds
+        pad = self._pad(b)
+        return (b[0] - pad, b[2] + pad, b[1] - pad, b[3] + pad)
+
+    @staticmethod
+    def _expand_box(box: tuple, extra_frac: float) -> tuple:
+        x0, x1, y0, y1 = box
+        w, h = x1 - x0, y1 - y0
+        dw, dh = w * extra_frac / 2, h * extra_frac / 2
+        return (x0 - dw, x1 + dw, y0 - dh, y1 + dh)
+
+    def _flight_boxes(self, from_country: str, to_country: str):
+        """(start_box, end_box, wide_box) for fly_to()/preload_fly() — end_box
+        is highlight()'s normal destination zoom widened by _FLY_END_PAD_MULT
+        (a full-screen transition needs more breathing room than the small
+        map panel's tight zoom), and wide_box is the box, padded further, that
+        contains both — the widest extent shown at any point in the flight.
+        None if either country isn't in the loaded geometry."""
+        start_box = self._country_box(from_country)
+        end_tight = self._country_box(to_country)
+        if start_box is None or end_tight is None:
+            return None
+        end_box = self._expand_box(end_tight, _FLY_END_PAD_MULT)
+        wx0, wx1 = min(start_box[0], end_box[0]), max(start_box[1], end_box[1])
+        wy0, wy1 = min(start_box[2], end_box[2]), max(start_box[3], end_box[3])
+        wpad = max(wx1 - wx0, wy1 - wy0) * 0.18
+        wide_box = (wx0 - wpad, wx1 + wpad, wy0 - wpad, wy1 + wpad)
+        return start_box, end_box, wide_box
+
+    def preload_fly(self, from_country: str, to_country: str):
+        """Kick off fly_to()'s expensive wide-view capture in the BACKGROUND,
+        ahead of the player actually pressing the button — call this as soon
+        as the destination is known (e.g. when a recap screen naming it
+        appears). By the time fly_to() actually runs, the capture is usually
+        already sitting in _fly_cache and the animation starts immediately;
+        otherwise fly_to() falls back to rendering it synchronously itself.
+        A no-op if the map data or either country isn't ready yet, or if this
+        exact (from, to) pair is already cached or being captured."""
+        if self._world is None or from_country not in self._names or to_country not in self._names:
+            return
+        key = (from_country, to_country)
+        if self._fly_cache is not None and self._fly_cache['key'] == key:
+            return
+        if self._fly_capture_thread is not None and self._fly_capture_thread.isRunning():
+            if self._fly_capture_thread._key == key:
+                return
+            self._fly_capture_thread.wait()   # let the stale one finish; its result is just ignored below
+        boxes = self._flight_boxes(from_country, to_country)
+        if boxes is None:
+            return
+        _, _, wide_box = boxes
+        th = _FlyCaptureThread(key, self._world, self._iso2_map, wide_box,
+                               from_country, to_country, _FLY_CAPTURE_DPI)
+        th.ready.connect(self._on_fly_captured)
+        self._fly_capture_thread = th
+        th.start()
+
+    def _on_fly_captured(self, key: tuple, png_bytes: bytes, box: tuple):
+        pixmap = QPixmap()
+        pixmap.loadFromData(png_bytes, 'PNG')
+        self._fly_cache = {'key': key, 'pixmap': pixmap, 'box': box}
+
+    def fly_to(self, from_country: str, to_country: str, on_done=None,
+              duration_ms: int = 2200):
+        """Animate the camera from `from_country` to `to_country`: zoom out to
+        a view wide enough to hold both (their flags both visible at once),
+        hold there briefly, then zoom into the destination — like a map
+        app's "fly to" transition. Ends in the exact state highlight(
+        to_country) would leave (single flag, label, but framed by the wider
+        landing box the animation eased into — see _flight_boxes). Calls
+        on_done() once finished, or immediately with an instant highlight()
+        if the map data or either country isn't available yet.
+
+        Uses preload_fly()'s cached capture if it's ready (near-zero delay);
+        otherwise renders it synchronously here, after forcing the
+        highlight(from_country) below to actually paint first so the
+        (blocking) wait reads as a deliberate pause, not a freeze.
+
+        fly_skip() cuts an in-progress animation straight to that same end
+        state, for a player-triggered skip."""
+        if (self._world is None or self._fly_active
+                or from_country not in self._names or to_country not in self._names):
+            self.highlight(to_country)
+            if on_done:
+                on_done()
+            return
+
+        boxes = self._flight_boxes(from_country, to_country)
+        if boxes is None:
+            self.highlight(to_country)
+            if on_done:
+                on_done()
+            return
+        start_box, end_box, wide_box = boxes
+        self._fly_end_box = end_box   # so fly_skip() lands with the same framing
+
+        # Snap the (still-visible) canvas to the departure country first —
+        # a cache miss below takes a beat to render, and showing
+        # "from_country" zoomed in during that beat reads as a deliberate
+        # pause, not a hang.
+        self.highlight(from_country)
+
+        key = (from_country, to_country)
+        if self._fly_cache is not None and self._fly_cache['key'] == key:
+            pixmap, capture_box = self._fly_cache['pixmap'], self._fly_cache['box']
+        else:
+            QCoreApplication.processEvents()   # actually paint the highlight() above before blocking
+            png = _capture_flight_png(self._world, self._iso2_map, wide_box,
+                                      from_country, to_country, _FLY_CAPTURE_DPI)
+            pixmap = QPixmap()
+            pixmap.loadFromData(png, 'PNG')
+            capture_box = wide_box
+        self._fly_cache = None
+
+        self._active = to_country
+        if self._collection is not None:
+            self._collection.set_facecolor(LAND)
+        self._clear_flags()
+        self._draw_flag(from_country)
+        self._draw_flag(to_country)
+        if self._label:
+            self._label.set_visible(False)
+
+        self._fly_overlay.set_image(pixmap, capture_box)
+        self._fly_overlay.set_view(*start_box)
+        self._pages.setCurrentWidget(self._fly_overlay)
+
+        # Three phases of duration_ms: zoom out to the wide view, hold there
+        # (both flags visible), then zoom into the destination.
+        phases = [
+            (start_box, wide_box, duration_ms * 0.30),
+            (wide_box,  wide_box, duration_ms * 0.25),
+            (wide_box,  end_box,  duration_ms * 0.45),
+        ]
+        state = {'phase': 0, 'elapsed': 0.0}
+
+        def _tick():
+            state['elapsed'] += 16
+            box_from, box_to, dur = phases[state['phase']]
+            frac = min(1.0, state['elapsed'] / max(dur, 1))
+            e = 1 - (1 - frac) ** 3   # ease-out cubic
+            x0 = box_from[0] + (box_to[0] - box_from[0]) * e
+            x1 = box_from[1] + (box_to[1] - box_from[1]) * e
+            y0 = box_from[2] + (box_to[2] - box_from[2]) * e
+            y1 = box_from[3] + (box_to[3] - box_from[3]) * e
+            self._fly_overlay.set_view(x0, x1, y0, y1)
+            if frac >= 1.0:
+                state['phase'] += 1
+                state['elapsed'] = 0.0
+                if state['phase'] >= len(phases):
+                    self._fly_timer.stop()
+                    self._fly_active = False
+                    self.highlight(to_country, box=end_box)   # lands framed exactly like the animation's last frame
+                    if on_done:
+                        on_done()
+
+        self._fly_active = True
+        self._fly_timer = QTimer(self)
+        self._fly_timer.setInterval(16)
+        self._fly_timer.timeout.connect(_tick)
+        self._fly_timer.start()
+
+    def fly_skip(self, to_country: str, on_done=None):
+        """Cut an in-progress fly_to() straight to its end state."""
+        if self._fly_timer is not None:
+            self._fly_timer.stop()
+        was_active = self._fly_active
+        self._fly_active = False
+        if was_active:
+            self.highlight(to_country, box=self._fly_end_box)
+            if on_done:
+                on_done()
 
     def reset(self):
         self._active = None

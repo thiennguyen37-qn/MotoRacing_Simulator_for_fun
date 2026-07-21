@@ -21,6 +21,11 @@ START_YEAR   = 2026
 # as opposed to a one-off session ('random') or a non-race page.
 SEASON_MODES = {'championship', 'career'}
 
+# Career only: the five sessions of a race weekend, in order. wiz.session_index
+# points at the next one; the Career Hub's "Upcoming session" box names it and
+# runs them one at a time, returning to the hub between each.
+SESSION_NAMES = ['Practice', 'Qualifying 1', 'Qualifying 2', 'Race 1', 'Race 2']
+
 
 class _GapFiller(QWidget):
     """
@@ -73,6 +78,12 @@ class MotoWizard(QWizard):
         self.circuit_index = 0
         self.all_race_pts  = []
 
+        # Career only: which session of the current round is up next (0-4, see
+        # SESSION_NAMES). The Career Hub runs one session per excursion and
+        # returns here between them; in-memory only (reset to 0 at round start),
+        # which matches the round-granular season save.
+        self.session_index = 0
+
         # Which of the CAREER_SLOTS (0-9) the current Career session reads/
         # writes — set by CareerPage before any save/history/rider call.
         self.career_slot = None
@@ -96,6 +107,10 @@ class MotoWizard(QWizard):
         # Per-circuit state (reset each circuit)
         self.circuit          = None
         self.practice_results = None
+        # Career splits Qualifying into two hub excursions (Q1, then Q2); the
+        # full run_qualifying() output computed during Q1 is parked here so the
+        # Q2 visit can show Q2 + the grid without re-simulating.
+        self.quali_result     = None
         self.grid_all_df      = None
         self.race_pts         = []
         self.race_results     = []   # current round's per-race classifications
@@ -234,6 +249,24 @@ class MotoWizard(QWizard):
 
     def reject(self):
         pass  # prevent Escape from closing the wizard
+
+    def return_to_hub_after_session(self):
+        """Career only: a single weekend session just finished — advance the
+        session pointer and walk history back to the Season Hub, which the hub
+        excursion (hub -> next() -> session page) sits exactly one page ahead
+        of. resume_at_hub() re-reads state so the 'Upcoming session' box shows
+        the next session. See SESSION_NAMES / SeasonHubPage.nextId()."""
+        self.session_index += 1
+        self.return_to_hub()
+
+    def return_to_hub(self):
+        """Walk history back to the Season Hub and re-show it. Used both when a
+        session completes and when one is abandoned with Esc (which leaves
+        session_index untouched, so the same session stays up next)."""
+        while self.currentId() not in (self.ID_SEASON_HUB, self.startId()):
+            self.back()
+        if self.currentId() == self.ID_SEASON_HUB:
+            self.currentPage().resume_at_hub()
 
     def accept(self):
         """Finishing any mode returns to the home page — the app only exits

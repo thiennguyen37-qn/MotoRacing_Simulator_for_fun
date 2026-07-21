@@ -376,6 +376,9 @@ class ChampionshipPage(QWizardPage):
         if not to_hub:
             wiz.accept()
             return
+        # Career returns to the hub with the weekend reset to its first session
+        # (the round just banked, or the finished season archived above).
+        wiz.session_index = 0
         while wiz.currentId() not in (wiz.ID_SEASON_HUB, wiz.startId()):
             wiz.back()
         if wiz.currentId() == wiz.ID_SEASON_HUB:
@@ -423,6 +426,13 @@ class ChampionshipPage(QWizardPage):
         wiz = self._wiz
         self._bank_round()
         wiz.save_season()               # resume point: start of the next round
+        if wiz.mode == 'career':
+            # Career runs the weekend from the hub — drop back to the Season Hub
+            # at the next round's first session (Practice) instead of walking
+            # straight into the Practice page.
+            wiz.session_index = 0
+            wiz.return_to_hub()
+            return
         while wiz.currentId() not in (wiz.ID_PRACTICE, wiz.startId()):
             wiz.back()
         if wiz.currentId() == wiz.ID_PRACTICE:

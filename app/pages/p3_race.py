@@ -113,6 +113,9 @@ class RacePage(QWizardPage):
         self._wiz       = wiz
         self._r1_done   = False
         self._both_done = False
+        # Career runs Race 1 and Race 2 as two separate hub excursions; True
+        # once the current excursion's race has finished revealing.
+        self._career_session_done = False
         self._reveal_timers: dict[int, list] = {}   # table-id → pending QTimers
         self._reveal_anims:  dict[int, list] = {}    # table-id → running animations
         self.setTitle('Race Weekend')
@@ -163,12 +166,23 @@ class RacePage(QWizardPage):
                 if btn.isEnabled():
                     btn.click()
                     return True
+            # Career: after Race 1 finishes, hand back to the hub (Race 2 is
+            # the next excursion). After Race 2, fall through so global Enter
+            # advances to the Standings round summary as usual.
+            if (self._wiz.mode == 'career' and self._wiz.session_index <= 3
+                    and self._career_session_done):
+                self._wiz.return_to_hub_after_session()
+                return True
             return False    # both races done -> global Enter advances
         return False
 
     def initializePage(self):
+        if self._wiz.mode == 'career':
+            self._init_career()
+            return
         self._r1_done   = False
         self._both_done = False
+        self._career_session_done = False
         self._stop_reveal(self._t_r1)
         self._stop_reveal(self._t_r2)
         self._btn_r1.setEnabled(True)
@@ -181,6 +195,42 @@ class RacePage(QWizardPage):
         self._wiz.race_pts     = []
         self._wiz.race_results = []
         self._tabs.setCurrentIndex(0)
+        self.completeChanged.emit()
+
+    def _init_career(self):
+        """Career visits this page twice a round: Race 1 (session_index 3),
+        then Race 2 (index 4). The Race 1 visit starts the round's races fresh;
+        the Race 2 visit keeps Race 1's banked result (its table still shows it
+        from the earlier visit) and runs only Race 2, so both classifications
+        accumulate into race_pts / race_results for the round summary."""
+        self._career_session_done = False
+        self._stop_reveal(self._t_r1)
+        self._stop_reveal(self._t_r2)
+        self._status.setText('')
+        if self._wiz.session_index <= 3:
+            # Race 1 excursion — reset the round's race state.
+            self._r1_done   = False
+            self._both_done = False
+            self._btn_r1.setEnabled(True)
+            self._btn_r1.setText('▶  Run Race 1')
+            self._btn_r2.setEnabled(False)
+            self._btn_r2.setText('▶  Run Race 2')
+            self._t_r1.setRowCount(0)
+            self._t_r2.setRowCount(0)
+            self._wiz.race_pts     = []
+            self._wiz.race_results = []
+            self._tabs.setCurrentIndex(0)
+        else:
+            # Race 2 excursion — Race 1 stays banked (its table still holds the
+            # earlier reveal); enable only Race 2.
+            self._r1_done   = True
+            self._both_done = False
+            self._btn_r1.setEnabled(False)
+            self._btn_r1.setText('✓  Race 1')
+            self._btn_r2.setEnabled(True)
+            self._btn_r2.setText('▶  Run Race 2')
+            self._t_r2.setRowCount(0)
+            self._tabs.setCurrentIndex(1)
         self.completeChanged.emit()
 
     def _run(self, race_num):
@@ -279,14 +329,23 @@ class RacePage(QWizardPage):
         weather = 'WET 🌧' if meta['is_wet'] else 'DRY ☀'
         winner  = result_df.iloc[0]['name']
         fl      = meta['fl_name']
+        career  = self._wiz.mode == 'career'
+        tail    = '   ·   Enter → hub' if (career and race_num == 1) else ''
         self._status.setText(
-            f"✓ Race {race_num}  {weather}  |  Winner: {winner}  |  ⚡ FL: {fl}"
+            f"✓ Race {race_num}  {weather}  |  Winner: {winner}  |  ⚡ FL: {fl}{tail}"
         )
         if race_num == 1:
             self._r1_done = True
-            self._btn_r2.setEnabled(True)
+            if career:
+                # Race 1 is its own hub session — Enter returns to the hub
+                # rather than unlocking Race 2 here (that's the next excursion).
+                self._career_session_done = True
+            else:
+                self._btn_r2.setEnabled(True)
         else:
             self._both_done = True
+            if career:
+                self._career_session_done = True
             self.completeChanged.emit()
 
     def isComplete(self):

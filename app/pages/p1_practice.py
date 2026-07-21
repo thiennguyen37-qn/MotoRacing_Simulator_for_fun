@@ -40,9 +40,16 @@ class PracticePage(QWizardPage):
             bar = self._table.verticalScrollBar()
             bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
             return True
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self._btn.isEnabled():
-            self._btn.click()
-            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._btn.isEnabled():
+                self._btn.click()
+                return True
+            # Career runs one session per hub excursion: once Practice is done,
+            # Enter hands back to the Season Hub instead of advancing to
+            # Qualifying. Championship/Random keep the straight-through flow.
+            if self._done and self._wiz.mode == 'career':
+                self._wiz.return_to_hub_after_session()
+                return True
         return False    # session done -> global Enter advances the page
 
     def initializePage(self):

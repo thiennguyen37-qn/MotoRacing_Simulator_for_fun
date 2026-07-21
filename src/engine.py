@@ -75,13 +75,16 @@ def perf_score(row, w_spd, w_cor, w_brk):
     return 0.55 * bike + 0.45 * rider
 
 
-def simulate_lap(row, base_time, lap_num, score):
+def simulate_lap(row, base_time, lap_num, score, is_wet=False):
     """Return a single practice lap time in seconds."""
     time_penalty = (1 - score) * MAX_DELTA
     warmup       = max(0.0, (5 - lap_num) / 5.0) * 1.5  # fades after lap 5
     variance     = 0.8 * (1 - norm(row['consistency'])) * (1 - norm(row['stability']))
     noise        = np.random.uniform(-variance, variance)
-    return max(base_time + time_penalty + warmup + noise, base_time * 0.98)
+    # Same flat + wet-skill penalty the race uses, so a wet practice runs
+    # slower for everyone and rewards a strong wet_performance rating.
+    wet_pen      = (WET_PEN_BASE + WET_PEN_SKILL_MAX * (1 - norm(row['wet_performance']))) if is_wet else 0.0
+    return max(base_time + time_penalty + warmup + noise + wet_pen, base_time * 0.98)
 
 
 # ── Qualifying ────────────────────────────────────────────────────────────────
@@ -105,10 +108,12 @@ def perf_score_quali(row, w_spd, w_cor, w_brk):
     return 0.55 * bike + 0.45 * rider
 
 
-def simulate_quali_lap(row, base_time, lap_num, score, is_push):
+def simulate_quali_lap(row, base_time, lap_num, score, is_push, is_wet=False):
     """Return a qualifying lap time; returns None on crash."""
     if is_push:
         crash_prob = 0.05 + 0.06 * norm(row['aggression']) * (1 - norm(row['consistency']))
+        if is_wet:
+            crash_prob *= CRASH_PROB_WET_MULT   # a wet push lap is far riskier
         if np.random.random() < crash_prob:
             return None
         push_gain = 0.3 + 0.2 * norm(row['aggression'])
@@ -119,7 +124,10 @@ def simulate_quali_lap(row, base_time, lap_num, score, is_push):
         variance = 0.5 * (1 - norm(row['consistency'])) * (1 - norm(row['stability']))
     warmup = 0.5 if lap_num == 1 else 0.0
     noise  = np.random.uniform(-variance, variance)
-    return max(base_time + time_pen + warmup + noise, base_time * 0.97)
+    # Flat + wet-skill penalty, same as practice/race — every quali lap is
+    # slower in the wet and separates riders by their wet_performance.
+    wet_pen = (WET_PEN_BASE + WET_PEN_SKILL_MAX * (1 - norm(row['wet_performance']))) if is_wet else 0.0
+    return max(base_time + time_pen + warmup + noise + wet_pen, base_time * 0.97)
 
 
 # ── Race ──────────────────────────────────────────────────────────────────────

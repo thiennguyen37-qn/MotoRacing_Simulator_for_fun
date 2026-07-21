@@ -156,7 +156,8 @@ class QualifyingPage(QWizardPage):
         self._btn_q1.setEnabled(False)
         self._status.setText('Running Q1…')
         q1, q2, adv, nq, grid = run_qualifying(
-            self._wiz.df, self._wiz.circuit, self._wiz.practice_results
+            self._wiz.df, self._wiz.circuit, self._wiz.practice_results,
+            is_wet=self._wiz.session_is_wet()
         )
         self._q1_class   = q1
         self._q2_class   = q2

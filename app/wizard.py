@@ -26,6 +26,13 @@ SEASON_MODES = {'championship', 'career'}
 # runs them one at a time, returning to the hub between each.
 SESSION_NAMES = ['Practice', 'Qualifying 1', 'Qualifying 2', 'Race 1', 'Race 2']
 
+# Real-world weekend layout: Friday practice, Saturday Q1/Q2/Race 1, Sunday
+# Race 2. SESSION_DAY[session_index] is that session's day (0/1/2); sessions
+# sharing a day share one weather roll (see p_season_hub._roll_session_weather
+# and SeasonHubPage._refresh_data's day-keyed cache).
+DAY_NAMES   = ['Friday', 'Saturday', 'Sunday']
+SESSION_DAY = [0, 1, 1, 1, 2]
+
 
 class _GapFiller(QWidget):
     """
@@ -83,6 +90,15 @@ class MotoWizard(QWizard):
         # returns here between them; in-memory only (reset to 0 at round start),
         # which matches the round-granular season save.
         self.session_index = 0
+
+        # Career only: the current weekend day's rolled forecast — a dict with
+        # is_wet/temp/humidity/label/day, set by SeasonHubPage each time the
+        # hub is (re)shown (see p_season_hub._roll_session_weather and its
+        # day-keyed cache). RacePage reads weekend_weather['is_wet'] so the
+        # Race a session actually plays out matches what the hub forecast —
+        # temp/humidity/label stay cosmetic on top of that shared roll. None
+        # until the first hub visit (and always None outside career mode).
+        self.weekend_weather = None
 
         # Which of the CAREER_SLOTS (0-9) the current Career session reads/
         # writes — set by CareerPage before any save/history/rider call.
@@ -249,6 +265,16 @@ class MotoWizard(QWizard):
 
     def reject(self):
         pass  # prevent Escape from closing the wizard
+
+    def session_is_wet(self) -> bool:
+        """Career only: whether this weekend day's rolled forecast is wet
+        (weekend_weather, set by the Season Hub — see
+        p_season_hub._roll_session_weather). Practice, Qualifying and Race all
+        read this so every session plays out in the same conditions the hub
+        showed. Always dry (False) outside career or before the first roll —
+        Random/Championship practice & qualifying have no forecast to honour."""
+        return bool(self.mode == 'career' and self.weekend_weather
+                    and self.weekend_weather.get('is_wet'))
 
     def return_to_hub_after_session(self):
         """Career only: a single weekend session just finished — advance the

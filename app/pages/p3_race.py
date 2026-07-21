@@ -240,10 +240,19 @@ class RacePage(QWizardPage):
             self._btn_r2.setEnabled(False)
         self._status.setText(f'Running Race {race_num}…')
 
-        # forced_weather is a Random Race-only override (set by WeatherPage,
-        # which championship rounds never visit) — gate by mode so a stale
-        # value from an earlier Random Race can't leak into a championship.
-        forced_weather = self._wiz.forced_weather if self._wiz.mode == 'random' else None
+        # forced_weather: Random Race takes its override from WeatherPage;
+        # Career instead reuses the Season Hub's already-rolled forecast for
+        # this weekend day (wiz.weekend_weather — see
+        # p_season_hub._roll_session_weather) so the race that actually plays
+        # out matches what the hub showed, rather than rolling independently.
+        # Championship rounds visit neither, so forced_weather stays None
+        # there (the plain WET_RACE_PROB_PCT dice roll in run_race()).
+        if self._wiz.mode == 'random':
+            forced_weather = self._wiz.forced_weather
+        elif self._wiz.mode == 'career' and self._wiz.weekend_weather is not None:
+            forced_weather = 'wet' if self._wiz.session_is_wet() else 'dry'
+        else:
+            forced_weather = None
         result_df, pts_df, meta = run_race(
             self._wiz.df, self._wiz.circuit, self._wiz.grid_all_df,
             forced_weather=forced_weather

@@ -84,7 +84,7 @@ class PracticePage(QWizardPage):
         QWizardPage.update(self)
 
         c = self._wiz.circuit
-        res = run_practice(self._wiz.df, c)
+        res = run_practice(self._wiz.df, c, is_wet=self._wiz.session_is_wet())
         self._wiz.practice_results = res
 
         rows = []

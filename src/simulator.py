@@ -16,17 +16,17 @@ from src.engine import (
 POINTS = {1: 25, 2: 20, 3: 16, 4: 13, 5: 11, 6: 10,
           7: 9, 8: 8, 9: 7, 10: 6, 11: 5, 12: 4, 13: 3, 14: 2, 15: 1}
 
-WET_RACE_PROB_PCT = 6.5  # chance (%) that a given race is run in wet conditions
+WET_RACE_PROB_PCT = 5.0  # chance (%) that a given race is run in wet conditions
 
 
-def run_practice(df, circuit, laps=15):
+def run_practice(df, circuit, laps=15, is_wet=False):
     """Returns DataFrame sorted by best lap. Index is 1-based position."""
     w = circuit_weights(circuit)
     bt = float(circuit['base_lap_time'])
     rows = []
     for _, r in df.sort_values('bike_number').iterrows():
         s = perf_score(r, *w)
-        ts = [simulate_lap(r, bt, i + 1, s) for i in range(laps)]
+        ts = [simulate_lap(r, bt, i + 1, s, is_wet) for i in range(laps)]
         rows.append({'bike_number': int(r['bike_number']), 'name': r['name'],
                      'team': r['team'], 'manufacturer': r['manufacturer'],
                      'best_lap_sec': min(ts), 'best_lap': fmt_lap(min(ts))})
@@ -37,7 +37,7 @@ def run_practice(df, circuit, laps=15):
     return res
 
 
-def _quali_session(circuit, riders, push_laps=3):
+def _quali_session(circuit, riders, push_laps=3, is_wet=False):
     w = circuit_weights(circuit)
     bt = float(circuit['base_lap_time'])
     total = int(900 // circuit['base_lap_time']) - 1
@@ -47,7 +47,7 @@ def _quali_session(circuit, riders, push_laps=3):
         s = perf_score_quali(r, *w)
         ts = []
         for lap in range(1, total + 1):
-            t = simulate_quali_lap(r, bt, lap, s, lap >= push_from)
+            t = simulate_quali_lap(r, bt, lap, s, lap >= push_from, is_wet)
             if t is not None:
                 ts.append(t)
         if ts:
@@ -62,7 +62,7 @@ def _quali_session(circuit, riders, push_laps=3):
     return res
 
 
-def run_qualifying(df, circuit, practice_results, push_laps=3):
+def run_qualifying(df, circuit, practice_results, push_laps=3, is_wet=False):
     """
     Returns (q1_class, q2_class, q2_advance_names, q1_nq, grid_all_df).
     grid_all_df has [grid_pos, name, bike_number, team, manufacturer, ...].
@@ -70,14 +70,14 @@ def run_qualifying(df, circuit, practice_results, push_laps=3):
     top10_names = set(practice_results.iloc[:10]['name'])
 
     q1_riders = df[~df['name'].isin(top10_names)].copy()
-    q1_class = _quali_session(circuit, q1_riders, push_laps)
+    q1_class = _quali_session(circuit, q1_riders, push_laps, is_wet)
 
     q2_advance_names = set(q1_class.head(2)['name'])
     q2_riders = pd.concat([
         df[df['name'].isin(top10_names)],
         df[df['name'].isin(q2_advance_names)],
     ], ignore_index=True)
-    q2_class = _quali_session(circuit, q2_riders, push_laps)
+    q2_class = _quali_session(circuit, q2_riders, push_laps, is_wet)
 
     q1_nq = q1_class[~q1_class['name'].isin(q2_advance_names)].reset_index(drop=True)
     q1_nq.index = range(13, 13 + len(q1_nq))

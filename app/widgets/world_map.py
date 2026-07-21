@@ -25,7 +25,22 @@ _FLY_CAPTURE_DPI = 480
 # around the destination than the small Calendar/Circuit map panel does, so
 # this is applied on top of _pad() rather than changing it (which those pages
 # still rely on for their own, tighter zoom).
-_FLY_END_PAD_MULT = 1.0
+_FLY_END_PAD_MULT = 0.7
+# Border/outline linewidths for _capture_flight_png(), thinner than the
+# interactive canvas's own (WorldMapWidget._on_loaded/_draw_flag use 0.6/0.8).
+# A linewidth is a fixed physical thickness in the rendered capture — but
+# fly_to()'s landing view crops a small fraction of that capture and stretches
+# it to fill the screen, magnifying that fixed thickness right along with
+# everything else. That factor is large (~4-5x for a far apart pair like
+# Japan->Qatar), so the borders visibly thicken through the zoom-in and read
+# as heavy for the ~1s before landing, then snap thin when highlight() takes
+# over with a fresh crisp render at the destination zoom. These are tuned so
+# that AFTER that magnification the border lands at roughly the interactive
+# canvas's own ~2.7px, matching the landed view (no thick-then-snap); the
+# trade-off is fainter borders during the brief, wide zoomed-OUT phase, where
+# they matter least.
+_FLY_BORDER_LW  = 0.13
+_FLY_OUTLINE_LW = 0.2
 
 _GEOJSON  = Path(__file__).parent.parent.parent / 'data' / 'world_countries.geojson'
 _FLAG_DIR = Path(__file__).parent.parent.parent / 'data' / 'flags'
@@ -166,21 +181,43 @@ def _draw_flag_on(ax, world, iso2_map: dict, country_name: str) -> None:
     im.set_clip_path(clip)
     outline = PathPatch(mpl_path, transform=ax.transData,
                         facecolor='none', edgecolor=BORDER,
-                        linewidth=0.8, zorder=5)
+                        linewidth=_FLY_OUTLINE_LW, zorder=5)
     ax.add_patch(outline)
+
+
+def _fit_box_aspect(box: tuple, aspect: float) -> tuple:
+    """Expand `box` (x0,x1,y0,y1), centred, along whichever axis is too
+    narrow so its width/height ratio becomes exactly `aspect`. Used to make
+    every box in a fly_to() flight match the real screen aspect — see
+    WorldMapWidget._flight_boxes for why that matters."""
+    x0, x1, y0, y1 = box
+    w, h = x1 - x0, y1 - y0
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    if w / h < aspect:
+        new_w = h * aspect
+        return (cx - new_w / 2, cx + new_w / 2, y0, y1)
+    new_h = w / aspect
+    return (x0, x1, cy - new_h / 2, cy + new_h / 2)
 
 
 def _capture_flight_png(world, iso2_map: dict, box: tuple,
                         from_country: str, to_country: str, dpi: int) -> bytes:
     """Render `box` (x0,x1,y0,y1) with both countries flagged, to PNG bytes —
     builds its own throwaway Figure/Axes so it's safe to call from a
-    background thread (see _FlyCaptureThread)."""
-    fig = Figure(figsize=(6, 3.6), dpi=100)
+    background thread (see _FlyCaptureThread).
+
+    The figure's own aspect ratio is derived from `box` itself (rather than a
+    fixed shape) so the render can't stretch the geometry to fit a canvas
+    shaped differently from the box being captured — WorldMapWidget's own
+    interactive canvas avoids this via set_aspect('equal', ...), which isn't
+    available on this throwaway one-off Figure."""
+    box_aspect = (box[1] - box[0]) / (box[3] - box[2])
+    fig = Figure(figsize=(6, 6 / box_aspect), dpi=100)
     fig.patch.set_facecolor(BG)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_facecolor(OCEAN)
     ax.set_axis_off()
-    world.plot(ax=ax, color=LAND, edgecolor=BORDER, linewidth=0.6)
+    world.plot(ax=ax, color=LAND, edgecolor=BORDER, linewidth=_FLY_BORDER_LW)
     _draw_flag_on(ax, world, iso2_map, from_country)
     _draw_flag_on(ax, world, iso2_map, to_country)
     ax.set_xlim(box[0], box[1])
@@ -507,12 +544,30 @@ class WorldMapWidget(QWidget):
         dw, dh = w * extra_frac / 2, h * extra_frac / 2
         return (x0 - dw, x1 + dw, y0 - dh, y1 + dh)
 
+    def _screen_aspect(self) -> float:
+        """This widget's current width/height — falls back to a plausible
+        widescreen ratio if it hasn't been given real geometry yet (shouldn't
+        normally happen: preload_fly()/fly_to() run once the app's already
+        showing its normal window)."""
+        w, h = self.width(), self.height()
+        return w / h if w > 0 and h > 0 else 16 / 9
+
     def _flight_boxes(self, from_country: str, to_country: str):
         """(start_box, end_box, wide_box) for fly_to()/preload_fly() — end_box
         is highlight()'s normal destination zoom widened by _FLY_END_PAD_MULT
         (a full-screen transition needs more breathing room than the small
         map panel's tight zoom), and wide_box is the box, padded further, that
         contains both — the widest extent shown at any point in the flight.
+
+        All three are then fit to this widget's actual screen aspect ratio
+        (_fit_box_aspect). That's not just cosmetic centring: fly_to()'s
+        per-frame view is a *linear interpolation* of these boxes' raw edges,
+        and that interpolation only keeps a constant width/height ratio at
+        every intermediate frame if the boxes it's between already share one
+        — otherwise the map visibly stretches/squashes through the pan
+        (countries reading tall-and-thin partway through the flight, which is
+        exactly what was happening before this).
+
         None if either country isn't in the loaded geometry."""
         start_box = self._country_box(from_country)
         end_tight = self._country_box(to_country)
@@ -523,6 +578,11 @@ class WorldMapWidget(QWidget):
         wy0, wy1 = min(start_box[2], end_box[2]), max(start_box[3], end_box[3])
         wpad = max(wx1 - wx0, wy1 - wy0) * 0.18
         wide_box = (wx0 - wpad, wx1 + wpad, wy0 - wpad, wy1 + wpad)
+
+        aspect = self._screen_aspect()
+        start_box = _fit_box_aspect(start_box, aspect)
+        end_box   = _fit_box_aspect(end_box, aspect)
+        wide_box  = _fit_box_aspect(wide_box, aspect)
         return start_box, end_box, wide_box
 
     def preload_fly(self, from_country: str, to_country: str):

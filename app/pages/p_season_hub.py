@@ -2352,20 +2352,32 @@ class _HubDashboard(QWidget):
         if self._right.width() != rw:
             self._right.setFixedWidth(rw)
 
-    def _sync_upcoming_height(self):
+    _MIN_SANE_STANDINGS_H = 150   # 5 rows * _DASH_ROW_H(30) alone is already 150
+
+    def _sync_upcoming_height(self, _retry: int = 0):
         """Pin the middle "Upcoming session" card to the same height as the
         Standings card so their bottom edges line up (both start at the top of
         the dashboard row). The Standings height is constant — 5 fixed rows —
         so this only needs to run once the panel has been laid out.
 
-        Skipped while the board is hidden: a hidden Standings card reports only
-        its title height (~53px), and pinning to that collapsed the Upcoming
-        card's content on top of itself until the next resize. showEvent
-        re-runs this once the real height is known."""
+        Skipped while the board is hidden: a hidden (or not-yet-laid-out)
+        Standings card reports only its title height (~53px), and pinning to
+        that collapsed the Upcoming card's content on top of itself until the
+        next resize. `isVisible()` alone isn't a reliable enough guard for
+        this — a widget can report visible before the top-level window has
+        finished its first real layout pass (e.g. resuming straight onto the
+        dashboard on a mid-season CONTINUE, which skips the intro's few
+        seconds of breathing room) — so an implausibly small reading here
+        retries a few times a beat later instead of trusting it outright.
+        showEvent also re-runs this once the page is shown."""
         if self._standings_wrap is None or not self.isVisible():
             return
         h = self._standings_wrap.sizeHint().height()
-        if h > 0 and self._upcoming_wrap.height() != h:
+        if h < self._MIN_SANE_STANDINGS_H:
+            if _retry < 15:
+                QTimer.singleShot(30, lambda: self._sync_upcoming_height(_retry + 1))
+            return
+        if self._upcoming_wrap.height() != h:
             self._upcoming_wrap.setFixedHeight(h)
 
     def showEvent(self, event):

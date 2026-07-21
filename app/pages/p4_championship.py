@@ -224,7 +224,12 @@ class ChampionshipPage(QWizardPage):
                 + (f"  |  {n - idx - 1} round(s) remaining" if idx < n - 1 else "  |  Final standings")
             )
             if idx < n - 1:
-                self._btn_next.setText(f'▶  Next Round ({idx + 2}/{n})')
+                # Career runs the weekend from the Season Hub, so this button
+                # just closes the grand prix and drops back there — hence a
+                # plain "Finish" (no icon, no round counter). Championship
+                # walks straight into the next round, so it keeps the counter.
+                self._btn_next.setText('Finish' if wiz.mode == 'career'
+                                       else f'▶  Next Round ({idx + 2}/{n})')
                 self._btn_finish.setVisible(False)
             else:
                 self._btn_next.setText('▶  Next Season')
@@ -429,7 +434,9 @@ class ChampionshipPage(QWizardPage):
         if wiz.mode == 'career':
             # Career runs the weekend from the hub — drop back to the Season Hub
             # at the next round's first session (Practice) instead of walking
-            # straight into the Practice page.
+            # straight into the Practice page. The hub reads this as a between-GP
+            # boundary (session_index 0, circuit_index just bumped > 0) and shows
+            # the "TO NEXT GRAND PRIX" recap — see SeasonHubPage._refresh_data.
             wiz.session_index = 0
             wiz.return_to_hub()
             return

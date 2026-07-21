@@ -6,7 +6,7 @@ import numpy as np
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QWidget,
                               QLabel, QStackedWidget, QFrame, QDialog, QSizePolicy,
                               QSpacerItem, QGraphicsOpacityEffect)
-from PyQt6.QtGui import (QFont, QPainter, QColor, QPixmap, QPainterPath,
+from PyQt6.QtGui import (QFont, QFontMetrics, QPainter, QColor, QPixmap, QPainterPath,
                           QLinearGradient, QPen)
 from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint, QSize,
                           pyqtSignal, QPropertyAnimation, QParallelAnimationGroup,
@@ -19,9 +19,9 @@ from app.pages.p_history import (_aggregate_riders, _build_rider_race_matrix,
                                   _stat_tiles, _TOTAL_COLS, _pos_bg,
                                   _flag_pixmap, _season_tables_data, _honours_data)
 from app.widgets.table_utils import TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR, row_bg
-from app.wizard import SESSION_NAMES
-from src.simulator import POINTS
-from src.engine import fmt_lap
+from app.wizard import SESSION_NAMES, SESSION_DAY
+from src.simulator import POINTS, WET_RACE_PROB_PCT
+from src.engine import fmt_lap, perf_score_race, circuit_weights, norm
 
 
 def _big_bike_pixmap(team_name: str, height: int = 200):
@@ -179,6 +179,9 @@ class _TabButton(QFrame):
     def set_focused(self, v: bool):
         self._focused = v
         self._apply()
+
+    def set_text(self, text: str):
+        self._lbl.setText(text)
 
     def _apply(self):
         if self._focused:
@@ -1286,10 +1289,11 @@ def _mini_board(title: str, entries: list, names_map: dict | None = None) -> QWi
     outer "OVERALL STATS" label any more, so whichever category is showing
     carries its own heading.
 
-    Always renders exactly `_MINI_BOARD_SLOTS` rows — padding with empty
-    placeholders when a category has fewer real entries — so this board's
-    height stays constant as it cycles categories; a category-dependent
-    height here was resizing _FormPanel too, since both share a grid row.
+    Always renders exactly `_MINI_BOARD_SLOTS` rows so this board's height
+    stays constant as it cycles categories (a category-dependent height here
+    was resizing _FormPanel too, since both share a grid row) — but a slot
+    past a category's real entries is left fully blank rather than shown as
+    a dim placeholder row.
 
     `names_map` looks up each rider's {'team', 'manufacturer'} (from
     _season_tables_data's 'names') so every row gets the same team/manu
@@ -1305,34 +1309,34 @@ def _mini_board(title: str, entries: list, names_map: dict | None = None) -> QWi
 
     names_map = names_map or {}
     for i in range(1, _MINI_BOARD_SLOTS + 1):
+        filled = i <= len(entries)
         row = QFrame()
         row.setFixedHeight(_MINI_ROW_H)   # same no-squeeze rule as the standings rows
         rl = QHBoxLayout(row)
         rl.setContentsMargins(10, 0, 10, 0)
         rl.setSpacing(8)
-        pos_lbl = QLabel(str(i)); pos_lbl.setFixedWidth(24)
+        pos_lbl = QLabel(str(i) if filled else ''); pos_lbl.setFixedWidth(24)
         name_lbl = _ElideLabel()
         count_lbl = QLabel(); count_lbl.setFixedWidth(44)
         count_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         for l in (pos_lbl, name_lbl, count_lbl):
             l.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
 
-        if i <= len(entries):
+        if filled:
             name, count = entries[i - 1]
             info = names_map.get(name, {})
             color = TEAM_COLOR.get(info.get('team', '')) or MANU_COLOR.get(
                 info.get('manufacturer', ''), _DEFAULT_COLOR)
             row.setStyleSheet(f'background: {row_bg(color).name()}; border-radius: 6px; border: none;')
-            text_color = '#ffffff'
             name_lbl.setFullText(str(name).upper())
             count_lbl.setText(str(count))
         else:
-            row.setStyleSheet('background: rgba(255,255,255,10); border-radius: 6px; border: none;')
-            text_color = '#5a5a72'
-            name_lbl.setFullText('—')
+            # Empty slot: invisible, but still _MINI_ROW_H tall so the board's
+            # height stays constant across categories with fewer entries.
+            row.setStyleSheet('background: transparent; border: none;')
 
         for l in (pos_lbl, name_lbl, count_lbl):
-            l.setStyleSheet(f'color:{text_color}; background:transparent; border:none;')
+            l.setStyleSheet('color:#ffffff; background:transparent; border:none;')
         rl.addWidget(pos_lbl)
         rl.addWidget(name_lbl, 1)
         rl.addWidget(count_lbl)
@@ -1633,12 +1637,98 @@ class _TrackHistoryPanel(QWidget):
             _play_transition(self, self._rows_holder, snapshot, transition)
 
 
+# Per-country climate baseline for the Upcoming Session forecast: (dry_temp_lo,
+# dry_temp_hi, dry_humidity_lo, dry_humidity_hi) in °C / %. Rough real-world
+# flavour for each circuit's country (desert Qatar hot & dry, UK cool & damp,
+# tropical Thailand/Brazil hot & humid, ...) — provisional, like the winner-
+# favourites model, and only ever cosmetic (see _roll_session_weather).
+_CLIMATE: dict[str, tuple[int, int, int, int]] = {
+    'Qatar':          (26, 36, 15, 35),
+    'Thailand':       (28, 36, 55, 80),
+    'Australia':      (18, 30, 30, 55),
+    'Japan':          (18, 28, 50, 75),
+    'Italy':          (20, 32, 30, 55),
+    'Spain':          (20, 34, 20, 45),
+    'Germany':        (14, 24, 40, 60),
+    'United Kingdom': (12, 20, 55, 75),
+    'Brazil':         (22, 32, 55, 80),
+    'Argentina':      (14, 26, 30, 55),
+    'Netherlands':    (13, 21, 55, 75),
+    'France':         (16, 26, 35, 60),
+    'Portugal':       (17, 27, 40, 65),
+}
+_CLIMATE_DEFAULT = (16, 28, 35, 60)   # fallback for a country not in the table
+
+
+def _weather_label(is_wet: bool, temp: float, humidity: float) -> str:
+    """Plain-language forecast bucketed from the already-rolled is_wet/temp/
+    humidity, so the label can never contradict them (no "Sunny" at 95%
+    humidity) — see _roll_session_weather. is_wet gates the two families
+    (rain vs no rain), then humidity sets the cloud cover and temperature
+    the warmth flavour, so both readings shape the wording."""
+    if is_wet:
+        # Rain family — heavier with humidity, a storm only when it's both
+        # saturated and warm enough for one.
+        if humidity > 95 and temp >= 20:
+            return 'Thunderstorm ⛈'
+        if humidity > 88:
+            return 'Rain 🌧'
+        return 'Light Rain 🌦'
+    # Dry family — cloud cover from humidity, then temperature colours it.
+    if humidity >= 55:
+        return 'Overcast ☁' if temp < 16 else 'Cloudy ☁'
+    if humidity >= 40:
+        return 'Partly Sunny 🌤'
+    # Clear skies — temperature sets the flavour of a low-humidity day.
+    if temp >= 30:
+        return 'Hot & Sunny ☀'
+    if temp < 14:
+        return 'Cool & Clear 🌤'
+    return 'Sunny ☀'
+
+
+def _roll_session_weather(country: str | None) -> dict:
+    """Forecast for the Upcoming Session card — one roll per weekend DAY
+    (Friday practice / Saturday Q1+Q2+Race 1 / Sunday Race 2, see
+    wizard.SESSION_DAY), cached on wiz.weekend_weather and reused across
+    sessions sharing a day; see SeasonHubPage._refresh_data's day-keyed cache.
+
+    is_wet (rolled here at WET_RACE_PROB_PCT, same odds run_race() itself
+    uses) is the single source of truth for the day — when a Race session for
+    that day actually runs, RacePage._run passes this same is_wet through as
+    forced_weather instead of rolling its own, so what the hub forecasts is
+    exactly what happens (see p3_race.py). temp/humidity/label stay purely
+    cosmetic on top of it: temp/humidity are sampled from the circuit's
+    country baseline (_CLIMATE), pulled cooler and wetter for a "wet" roll,
+    and the label is bucketed from the result."""
+    is_wet = np.random.uniform(0, 100) <= WET_RACE_PROB_PCT
+    lo, hi, hlo, hhi = _CLIMATE.get(country, _CLIMATE_DEFAULT)
+    if is_wet:
+        # Rain cools things down and pushes humidity to the top of the scale
+        # regardless of country — the wet temp band is still derived from the
+        # country's own dry range, so a Qatar shower reads warmer than a UK one.
+        mid = (lo + hi) / 2
+        temp = np.random.uniform(mid - 10, mid - 2)
+        humidity = np.random.uniform(78, 100)
+    else:
+        temp = np.random.uniform(lo, hi)
+        humidity = np.random.uniform(hlo, hhi)
+    temp, humidity = round(temp), round(humidity)
+    return {'is_wet': is_wet, 'temp': temp, 'humidity': humidity,
+            'label': _weather_label(is_wet, temp, humidity)}
+
+
 class _UpcomingSessionPanel(QWidget):
-    """Middle-column card naming the weekend session the player runs next
-    (Practice, Qualifying 1/2, Race 1/2 — see wizard.SESSION_NAMES), then a
-    second divider (like _NextRacePanel's) and a small conditions block:
-    current weather, temperature and humidity. Same heading+divider look and
-    the same _info_row style as every other dashboard panel."""
+    """Middle-column card with two looks that share one heading + divider:
+
+      • Normal — names the weekend session up next (Practice, Qualifying 1/2,
+        Race 1/2 — see wizard.SESSION_NAMES) over a second divider and a
+        conditions block (current weather / temperature / humidity).
+      • Between grand prix (the post-Finish "TO NEXT GRAND PRIX" hub landing)
+        — the NEXT round's flag and "GRAND PRIX OF <country>" instead, with no
+        second divider and no weather. Toggled by load()'s next_gp_country."""
+
+    _FLAG_H = 60
 
     def __init__(self):
         super().__init__()
@@ -1650,70 +1740,296 @@ class _UpcomingSessionPanel(QWidget):
         lay.addWidget(_panel_title('UPCOMING SESSION'))
         lay.addItem(_soft_gap(18))
 
+        # ── Normal: session name + second divider + weather block ──────────
+        self._session_box = QWidget()
+        self._session_box.setStyleSheet('background: transparent;')
+        sb = QVBoxLayout(self._session_box)
+        sb.setContentsMargins(0, 0, 0, 0)
+        sb.setSpacing(0)
         self._name_lbl = QLabel('—')
         self._name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._name_lbl.setWordWrap(True)
         self._name_lbl.setFont(QFont('Segoe UI', 17, QFont.Weight.Bold))
         self._name_lbl.setStyleSheet('color:#ffffff; letter-spacing:1px; background:transparent; border:none;')
-        lay.addWidget(self._name_lbl)
-        lay.addItem(_soft_gap(16))
-
+        sb.addWidget(self._name_lbl)
+        sb.addItem(_soft_gap(16))
         border2 = QFrame()
         border2.setFixedHeight(1)
         border2.setStyleSheet('background: rgba(255,255,255,60); border:none;')
-        lay.addWidget(border2)
-        lay.addItem(_soft_gap(14))
-
+        sb.addWidget(border2)
+        sb.addItem(_soft_gap(14))
         # White captions (not GP Info's dim grey), and the three rows are
         # spread with stretches between them so they fill down to near the
-        # card's bottom rather than huddling under the divider with a big
-        # empty gap below.
+        # card's bottom rather than huddling under the divider.
         self._weather_row, self._weather_val = _info_row('CURRENT WEATHER', label_color='#ffffff')
         self._temp_row,    self._temp_val    = _info_row('TEMPERATURE',     label_color='#ffffff')
         self._humid_row,   self._humid_val   = _info_row('HUMIDITY',        label_color='#ffffff')
-        lay.addWidget(self._weather_row)
-        lay.addStretch(1)
-        lay.addWidget(self._temp_row)
-        lay.addStretch(1)
-        lay.addWidget(self._humid_row)
+        sb.addWidget(self._weather_row)
+        sb.addStretch(1)
+        sb.addWidget(self._temp_row)
+        sb.addStretch(1)
+        sb.addWidget(self._humid_row)
+        lay.addWidget(self._session_box, 1)
+
+        # ── Between grand prix: next round's flag + "GRAND PRIX OF X" ───────
+        self._nextgp_box = QWidget()
+        self._nextgp_box.setStyleSheet('background: transparent;')
+        nb = QVBoxLayout(self._nextgp_box)
+        nb.setContentsMargins(0, 0, 0, 0)
+        nb.setSpacing(0)
+        nb.addStretch(1)
+        self._flag_lbl = QLabel()
+        self._flag_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._flag_lbl.setFixedHeight(self._FLAG_H)
+        nb.addWidget(self._flag_lbl)
+        nb.addItem(_soft_gap(18))
+        self._gp_name_lbl = QLabel()
+        self._gp_name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._gp_name_lbl.setWordWrap(True)
+        self._gp_name_lbl.setFont(QFont('Segoe UI', 16, QFont.Weight.Bold))
+        self._gp_name_lbl.setStyleSheet('color:#ffffff; letter-spacing:1px; background:transparent; border:none;')
+        nb.addWidget(self._gp_name_lbl)
+        nb.addStretch(1)
+        lay.addWidget(self._nextgp_box, 1)
+        self._nextgp_box.setVisible(False)
 
     def load(self, session_name: str, weather: str = '—',
-             temperature: str = '—', humidity: str = '—'):
-        self._name_lbl.setText(str(session_name).upper())
-        self._weather_val.setFullText(str(weather))
-        self._temp_val.setFullText(str(temperature))
-        self._humid_val.setFullText(str(humidity))
+             temperature: str = '—', humidity: str = '—',
+             next_gp_country: str | None = None):
+        if next_gp_country:
+            country = str(next_gp_country)
+            pix = _flag_pixmap(country, height=self._FLAG_H) if country else None
+            self._flag_lbl.setPixmap(pix if pix is not None else QPixmap())
+            self._gp_name_lbl.setText(f'GRAND PRIX OF {country.upper()}')
+            self._session_box.setVisible(False)
+            self._nextgp_box.setVisible(True)
+        else:
+            self._name_lbl.setText(str(session_name).upper())
+            self._weather_val.setFullText(str(weather))
+            self._temp_val.setFullText(str(temperature))
+            self._humid_val.setFullText(str(humidity))
+            self._nextgp_box.setVisible(False)
+            self._session_box.setVisible(True)
 
 
-def _winner_favourites(df, limit: int = 3, temp: float = 3.0) -> list:
-    """Top `limit` riders by a theoretical win chance for the upcoming Grand
-    Prix. Provisional model (to refine later, like the weather block): each
-    rider's power = mean of the STATS ratings, turned into a probability with
-    a softmax (temp spreads it — lower = more top-heavy). Returns dicts with
-    name / team / manufacturer / pct, highest first."""
+class _MarqueeLabel(QWidget):
+    """A name label that scrolls its text sideways, LED-sign style, instead of
+    cutting it off with an ellipsis — used for the GP Winner Favourites
+    bar-chart names, which sit in a column too narrow for names like "MATTEO
+    ESPOSITO". Text that already fits the widget is just centered and stays
+    still; only overflowing text scrolls, continuously and on a loop."""
+
+    _SPEED_PX = 1     # pixels advanced per tick
+    _TICK_MS  = 40     # ~25fps
+    _GAP      = 24     # blank gap between the text's end and its looped repeat
+
+    def __init__(self, font: QFont, color: str = '#ffffff'):
+        super().__init__()
+        self._text   = ''
+        self._font   = font
+        self._color  = QColor(color)
+        self._offset = 0
+        self.setFixedHeight(QFontMetrics(font).height())
+        self._timer = QTimer(self)
+        self._timer.setInterval(self._TICK_MS)
+        self._timer.timeout.connect(self._advance)
+
+    def setFullText(self, text: str):
+        self._text = text
+        self._offset = 0
+        self._sync_timer()
+        self.update()
+
+    def _text_width(self) -> int:
+        return QFontMetrics(self._font).horizontalAdvance(self._text)
+
+    def _sync_timer(self):
+        overflow = self.width() > 0 and self._text_width() > self.width()
+        if overflow and not self._timer.isActive():
+            self._timer.start()
+        elif not overflow and self._timer.isActive():
+            self._timer.stop()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_timer()
+
+    def _advance(self):
+        cycle = self._text_width() + self._GAP
+        self._offset = (self._offset + self._SPEED_PX) % max(cycle, 1)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(self._font)
+        p.setPen(self._color)
+        fm = QFontMetrics(self._font)
+        tw = fm.horizontalAdvance(self._text)
+        y = (self.height() + fm.ascent() - fm.descent()) // 2
+        if tw <= self.width():
+            p.drawText((self.width() - tw) // 2, y, self._text)
+        else:
+            cycle = tw + self._GAP
+            x = -self._offset
+            while x < self.width():
+                p.drawText(x, y, self._text)
+                x += cycle
+        p.end()
+
+
+# Winner-favourites model — relative weights of each active factor (they're
+# renormalised over whichever ones apply at the current weekend stage, so they
+# needn't sum to 1). Rating already folds in circuit fit and, in the wet, wet
+# skill; the Race-1 podium momentum rides inside the rating via an aggression
+# bump, so neither needs its own weight here.
+_FAV_W_RATING = 0.50   # rider+bike pace, weighted to the circuit (perf_score_race)
+_FAV_W_FORM   = 0.22   # last-5-rounds finishing form
+_FAV_W_GRID   = 0.28   # qualifying grid position (Race sessions only)
+_FAV_SOFTMAX_T = 0.12   # softmax spread over the [0,1] blended power; lower = top-heavier
+_FAV_PODIUM_AGGRO = {1: 3, 2: 2, 3: 1}   # Race-1 podium -> Race-2 aggression boost
+
+
+def _form_scores(rounds_detail_list: list, limit: int = 5) -> dict:
+    """Per-rider recent-form score in [0, 1] from the last `limit` ROUNDS
+    (fewer if the career is younger — "5 chặng gần đây, chưa đủ thì 4, 3…").
+    Each race a rider finished scores (field - pos)/(field - 1) — win = 1,
+    last = 0 — a DNF scores 0; the rider's score is the mean across those
+    races. Riders with no recent races get a neutral 0.5 so a newcomer isn't
+    punished as if they'd finished dead last."""
+    flat = _flatten_rounds((rounds_detail_list or [])[-limit:])
+    totals: dict[str, list] = {}
+    for _country, race in flat:
+        field = len(race)
+        if field < 2:
+            continue
+        for r in race:
+            pos = int(r.get('pos', 0))
+            val = 0.0 if r.get('dnf') or pos < 1 else (field - pos) / (field - 1)
+            totals.setdefault(str(r['name']), []).append(val)
+    return {n: (sum(v) / len(v)) for n, v in totals.items() if v}
+
+
+def _gp_point_scorers(round_detail: dict, limit: int = 5) -> list:
+    """Top `limit` point scorers of a single round — each rider's points summed
+    across the round's two races, highest first. Rows carry name/team/
+    manufacturer/points so the between-GP result panel can colour them exactly
+    like the standings (see _WinnerFavouritesPanel._render_result)."""
+    tally: dict[str, dict] = {}
+    for race in (round_detail or {}).get('races', []):
+        for r in race:
+            e = tally.setdefault(str(r['name']), {
+                'name': str(r['name']), 'team': str(r.get('team', '')),
+                'manufacturer': str(r.get('manufacturer', '')), 'points': 0})
+            e['points'] += int(r.get('points', 0))
+    return sorted(tally.values(), key=lambda x: -x['points'])[:limit]
+
+
+def _winner_favourites(df, *, circuit=None, session_index: int = 0,
+                       form_scores: dict | None = None, grid_df=None,
+                       is_wet: bool = False, race1_podium: dict | None = None,
+                       limit: int = 3) -> list:
+    """Top `limit` riders by an estimated win chance for the upcoming Grand
+    Prix, rebuilt at every hub visit so it grows sharper as the weekend
+    unfolds (see wizard.SESSION_DAY / session_index):
+
+      • Before Practice (session 0-2): recent form + circuit-weighted rider+
+        bike rating.
+      • Before Race 1 (session 3, after qualifying): adds grid position and
+        the day's weather — a wet forecast tilts the rating toward each
+        rider's wet_performance.
+      • Before Race 2 (session 4): adds "instant form" — the Race-1 podium
+        gets a temporary aggression bump (+3/+2/+1, _FAV_PODIUM_AGGRO) that
+        feeds back through the rating. It's applied to a throwaway copy of the
+        roster, so it only colours this circuit's Race 2 and never persists
+        into the next round.
+
+    Each factor is a [0,1] score; the active ones are blended by their
+    _FAV_W_* weights (renormalised) into one power, then a softmax turns the
+    field into probabilities. Returns dicts name/team/manufacturer/pct,
+    highest first."""
     if df is None or len(df) == 0:
         return []
-    stat_cols = [c for c, _, _ in STATS]
-    powers = df[stat_cols].mean(axis=1).to_numpy(dtype=float)
-    e = np.exp((powers - powers.max()) / temp)
-    w = e / e.sum()
-    order = list(np.argsort(-w))[:limit]
+    work = df.reset_index(drop=True).copy()
+    names = work['name'].astype(str).to_numpy()
+    n = len(work)
+
+    # Factor 6 (Race 2 only): instant-form aggression boost for the Race-1
+    # podium, on this throwaway copy so it never leaks past this circuit. Not
+    # clipped at the 99 rating ceiling — this is a momentum bonus for the
+    # estimate only (never the race sim), so a winner already at 99 still gets
+    # the full +3 edge rather than being silently capped out.
+    if session_index >= 4 and race1_podium:
+        for nm, boost in race1_podium.items():
+            work.loc[work['name'] == nm, 'aggression'] += boost
+
+    # Factors 2+3: circuit-weighted rider+bike rating — perf_score_race already
+    # blends the two, so a power track and a corner track reward different
+    # archetypes. Falls back to a flat stat mean if the circuit is unknown.
+    if circuit is not None:
+        w = circuit_weights(circuit)
+        rating = work.apply(lambda r: perf_score_race(r, *w), axis=1).to_numpy(float)
+    else:
+        stat_cols = [c for c, _, _ in STATS]
+        rating = norm(work[stat_cols].mean(axis=1).to_numpy(float))
+
+    # Factor 5 (weather, Race sessions): a wet track leans on wet skill.
+    if session_index >= 3 and is_wet:
+        rating = 0.6 * rating + 0.4 * norm(work['wet_performance'].to_numpy(float))
+
+    comps = [(_FAV_W_RATING, _minmax(rating))]
+
+    # Factor 1: recent form (every stage).
+    if form_scores:
+        form = np.array([form_scores.get(nm, 0.5) for nm in names], dtype=float)
+        comps.append((_FAV_W_FORM, form))
+
+    # Factor 4: grid position (Race sessions, once qualifying has set the grid).
+    if session_index >= 3 and grid_df is not None and len(grid_df) > 1:
+        gmap = {str(r['name']): int(r['grid_pos']) for _, r in grid_df.iterrows()}
+        field = len(grid_df)
+        grid = np.array([(field - gmap.get(nm, field)) / (field - 1) for nm in names], dtype=float)
+        comps.append((_FAV_W_GRID, grid))
+
+    total_w = sum(wt for wt, _ in comps) or 1.0
+    power = sum(wt * vals for wt, vals in comps) / total_w
+
+    e = np.exp((power - power.max()) / _FAV_SOFTMAX_T)
+    prob = e / e.sum()
+    order = list(np.argsort(-prob))[:limit]
     out = []
     for i in order:
-        row = df.iloc[int(i)]
+        row = work.iloc[int(i)]
         out.append({'name': str(row['name']), 'team': str(row['team']),
-                    'manufacturer': str(row['manufacturer']), 'pct': float(w[i] * 100)})
+                    'manufacturer': str(row['manufacturer']), 'pct': float(prob[i] * 100)})
     return out
 
 
-class _WinnerFavouritesPanel(QWidget):
-    """Bottom card of the middle column: the three riders most likely (in
-    theory) to win the upcoming Grand Prix, each in the same team/manufacturer
-    colour the standings rows use, with their win chance on the right. The
-    three rows are spread down the card so its bottom sits level with Recent
-    Form and Last 5 Winners."""
+def _minmax(a):
+    """Scale an array to [0, 1]; a flat array maps to all-0.5 (no signal)."""
+    a = np.asarray(a, dtype=float)
+    lo, hi = a.min(), a.max()
+    if hi - lo < 1e-9:
+        return np.full_like(a, 0.5)
+    return (a - lo) / (hi - lo)
 
-    _SLOTS = 3
+
+_FAV_CHART_H = 110   # fixed height of the bar area; bar heights scale within it
+_FAV_BAR_W   = 34
+_FAV_COL_GAP = 30     # fixed breathing room between columns — a flexible
+                      # stretch alone can collapse to ~0 on a narrow window,
+                      # which read as a scrolling name running into its neighbour
+
+
+class _WinnerFavouritesPanel(QWidget):
+    """Bottom card of the middle column, with two looks:
+
+      • Normal — "GRAND PRIX WINNER FAVOURITES": a vertical bar chart of the
+        riders most likely (in theory) to win the upcoming GP; taller bar =
+        higher win chance, coloured by team/manufacturer.
+      • Between grand prix (post-Finish) — "GRAND PRIX RESULT": the top 5
+        point scorers across the two races of the GP just finished, as a
+        standings-style row list. Toggled by load()'s gp_result."""
 
     def __init__(self):
         super().__init__()
@@ -1722,82 +2038,152 @@ class _WinnerFavouritesPanel(QWidget):
         lay.setContentsMargins(14, 10, 14, 12)
         lay.setSpacing(0)
 
-        # The title is long, so it rides a notch smaller than the other panels'
-        # 9pt headers and may wrap to two lines on a narrow window.
-        title = QLabel('GRAND PRIX WINNER FAVOURITES')
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setWordWrap(True)
+        # Same 9pt/letter-spacing as every other panel's _panel_title header;
+        # the title is long, so it still wraps to two lines on a narrow window.
+        self._title_lbl = QLabel('GRAND PRIX WINNER FAVOURITES')
+        self._title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._title_lbl.setWordWrap(True)
         # Let it wrap rather than dictate the card's minimum width — otherwise
         # the long title would keep the whole middle column ~354px wide and stop
         # the side columns from ever reclaiming that space on a narrow window.
-        title.setMinimumWidth(1)
-        title.setFont(QFont('Segoe UI', 8, QFont.Weight.Bold))
-        title.setStyleSheet('color:#ffffff; letter-spacing:1px; background:transparent; border:none;')
-        lay.addWidget(title)
+        self._title_lbl.setMinimumWidth(1)
+        self._title_lbl.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+        self._title_lbl.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
+        lay.addWidget(self._title_lbl)
         lay.addItem(_soft_gap(8))
         line = QFrame()
         line.setFixedHeight(1)
         line.setStyleSheet('background: rgba(255,255,255,60); border:none;')
         lay.addWidget(line)
-        lay.addItem(_soft_gap(10))
+        lay.addItem(_soft_gap(22))
 
-        self._rows_holder = QWidget()
-        self._rows_holder.setStyleSheet('background: transparent;')
-        self._rows_lay = QVBoxLayout(self._rows_holder)
-        self._rows_lay.setContentsMargins(0, 0, 0, 0)
-        self._rows_lay.setSpacing(0)
-        lay.addWidget(self._rows_holder, 1)   # fills the card so rows spread
+        # One body area rebuilt per mode (bar chart vs standings rows).
+        self._body = QWidget()
+        self._body.setStyleSheet('background: transparent;')
+        self._body_lay = QVBoxLayout(self._body)
+        self._body_lay.setContentsMargins(0, 0, 0, 0)
+        self._body_lay.setSpacing(0)
+        lay.addWidget(self._body, 1)
 
-    def load(self, favourites: list):
-        while self._rows_lay.count():
-            item = self._rows_lay.takeAt(0)
+    def _clear_body(self):
+        while self._body_lay.count():
+            item = self._body_lay.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.setParent(None)
-        if not favourites:
-            ph = QLabel('Not enough data yet.')
-            ph.setWordWrap(True)
-            ph.setFont(QFont('Segoe UI', 10))
-            ph.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
-            self._rows_lay.addStretch(1)
-            self._rows_lay.addWidget(ph)
-            self._rows_lay.addStretch(1)
-            return
-        self._rows_lay.addStretch(1)
-        for i in range(self._SLOTS):
+
+    def load(self, favourites: list | None = None, gp_result: list | None = None):
+        self._clear_body()
+        if gp_result is not None:
+            self._title_lbl.setText('GRAND PRIX RESULT')
+            self._render_result(gp_result)
+        else:
+            self._title_lbl.setText('GRAND PRIX WINNER FAVOURITES')
+            self._render_bars(favourites or [])
+
+    def _render_result(self, result: list):
+        """Standings-style top-5 rows (pos / name / points), team-coloured like
+        _StandingsPanel, spread down the card. No manufacturer column — the
+        name column takes that width so full rider names fit."""
+        self._body_lay.addStretch(1)
+        for i in range(5):
+            filled = i < len(result)
             row = QFrame()
             row.setFixedHeight(_DASH_ROW_H)
             rl = QHBoxLayout(row)
             rl.setContentsMargins(10, 0, 10, 0)
             rl.setSpacing(8)
-            pos_lbl = QLabel(str(i + 1)); pos_lbl.setFixedWidth(24)
+            pos_lbl = QLabel(str(i + 1) if filled else ''); pos_lbl.setFixedWidth(24)
             name_lbl = _ElideLabel()
-            manu_lbl = _ElideLabel(); manu_lbl.setFixedWidth(78)
-            pct_lbl = QLabel(); pct_lbl.setFixedWidth(48)
-            pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            for l in (pos_lbl, name_lbl, manu_lbl, pct_lbl):
+            pts_lbl = QLabel(); pts_lbl.setFixedWidth(44)
+            pts_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            labels = [pos_lbl, name_lbl, pts_lbl]
+            for l in labels:
                 l.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
-
-            if i < len(favourites):
-                f = favourites[i]
-                color = TEAM_COLOR.get(f.get('team', '')) or MANU_COLOR.get(
-                    f.get('manufacturer', ''), _DEFAULT_COLOR)
+            if filled:
+                s = result[i]
+                color = TEAM_COLOR.get(s.get('team', '')) or MANU_COLOR.get(
+                    s.get('manufacturer', ''), _DEFAULT_COLOR)
                 row.setStyleSheet(f'background: {row_bg(color).name()}; border-radius: 6px; border: none;')
-                name_lbl.setFullText(str(f.get('name', '')).upper())
-                manu_lbl.setFullText(str(f.get('manufacturer', '')).upper())
-                pct_lbl.setText(f"{f.get('pct', 0):.0f}%")
+                name_lbl.setFullText(str(s.get('name', '')).upper())
+                pts_lbl.setText(str(int(s.get('points', 0))))
             else:
                 row.setStyleSheet('background: transparent; border: none;')
-                pos_lbl.setText('')
-
-            for l in (pos_lbl, name_lbl, manu_lbl, pct_lbl):
+            for l in labels:
                 l.setStyleSheet('color:#ffffff; background:transparent; border:none;')
             rl.addWidget(pos_lbl)
             rl.addWidget(name_lbl, 1)
-            rl.addWidget(manu_lbl)
-            rl.addWidget(pct_lbl)
-            self._rows_lay.addWidget(row)
-            self._rows_lay.addStretch(1)
+            rl.addWidget(pts_lbl)
+            self._body_lay.addWidget(row)
+            self._body_lay.addStretch(1)
+
+    def _render_bars(self, favourites: list):
+        if not favourites:
+            ph = QLabel('Not enough data yet.')
+            ph.setWordWrap(True)
+            ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            ph.setFont(QFont('Segoe UI', 10))
+            ph.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
+            self._body_lay.addStretch(1)
+            self._body_lay.addWidget(ph)
+            self._body_lay.addStretch(1)
+            return
+        chart = QWidget()
+        chart.setStyleSheet('background: transparent;')
+        chart_lay = QHBoxLayout(chart)
+        chart_lay.setContentsMargins(0, 0, 0, 0)
+        chart_lay.setSpacing(4)
+        max_pct = max(f.get('pct', 0) for f in favourites) or 1.0
+        chart_lay.addStretch(1)
+        for i, f in enumerate(favourites):
+            if i > 0:
+                chart_lay.addSpacing(_FAV_COL_GAP)
+            pct = f.get('pct', 0)
+            color = TEAM_COLOR.get(f.get('team', '')) or MANU_COLOR.get(
+                f.get('manufacturer', ''), _DEFAULT_COLOR)
+
+            col = QWidget()
+            col.setStyleSheet('background: transparent;')
+            cl = QVBoxLayout(col)
+            cl.setContentsMargins(0, 0, 0, 0)
+            cl.setSpacing(6)
+
+            # The empty space goes ABOVE both the % label and the bar (not
+            # between them), so the two move down together — the percentage
+            # always sits right on top of its own bar instead of staying
+            # pinned to the column's top with a big gap under it for a short
+            # (low-%) bar.
+            bar_h = max(6, round(pct / max_pct * _FAV_CHART_H))
+            cl.addSpacing(_FAV_CHART_H - bar_h)
+
+            pct_lbl = QLabel(f'{pct:.0f}%')
+            pct_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pct_lbl.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
+            pct_lbl.setStyleSheet('color:#ffffff; background:transparent; border:none;')
+            cl.addWidget(pct_lbl)
+
+            bar = QFrame()
+            bar.setFixedSize(_FAV_BAR_W, bar_h)
+            bar.setStyleSheet(f'background: {color.name()}; border-radius: 4px; border: none;')
+            bar_row = QHBoxLayout()
+            bar_row.setContentsMargins(0, 0, 0, 0)
+            bar_row.addStretch(1)
+            bar_row.addWidget(bar)
+            bar_row.addStretch(1)
+            cl.addLayout(bar_row)
+
+            # Scrolls sideways instead of eliding — some rider names run
+            # longer than this narrow bar column can show at once.
+            name_lbl = _MarqueeLabel(QFont('Segoe UI', 8, QFont.Weight.Bold))
+            name_lbl.setFullText(str(f.get('name', '')).upper())
+            name_lbl.setFixedWidth(94)
+            cl.addWidget(name_lbl)
+
+            chart_lay.addWidget(col)
+        chart_lay.addStretch(1)
+        self._body_lay.addStretch(1)
+        self._body_lay.addWidget(chart)
+        self._body_lay.addStretch(1)
 
 
 _HUB_SIDEBAR_W = 380   # compact right-hand column (preferred width)
@@ -1999,14 +2385,24 @@ class _HubDashboard(QWidget):
             names_map: dict | None = None, next_circuit=None,
             track_winners: list | None = None, track_polesitters: list | None = None,
             brlc: tuple | None = None, blc: tuple | None = None,
-            upcoming_session: str = '', favourites: list | None = None):
+            upcoming_session: str = '', favourites: list | None = None,
+            weather: dict | None = None, next_gp_country: str | None = None,
+            gp_result: list | None = None):
         self._standings.load(standings, team_standings, manu_standings)
         self._form.load(races)
         self._overall_stats.load(honours, names_map)
         self._next_race.load(next_circuit, brlc, blc)
         self._track_history.load(track_winners or [], track_polesitters or [], names_map)
-        self._upcoming.load(upcoming_session)
-        self._favourites.load(favourites or [])
+        weather = weather or {}
+        # next_gp_country set -> "between grand prix" look (flag + GP name,
+        # no weather); gp_result set -> the finished GP's top-5 point scorers
+        # in place of the winner-favourites bar chart. Both come together on
+        # the post-Finish "TO NEXT GRAND PRIX" landing.
+        self._upcoming.load(upcoming_session, weather=weather.get('label', '—'),
+                            temperature=f"{weather['temp']}°C" if 'temp' in weather else '—',
+                            humidity=f"{weather['humidity']}%" if 'humidity' in weather else '—',
+                            next_gp_country=next_gp_country)
+        self._favourites.load(favourites=favourites, gp_result=gp_result)
         # Rows are in place now — match the Standings card's height on the next
         # tick (after the layout settles).
         QTimer.singleShot(0, self._sync_upcoming_height)
@@ -2472,30 +2868,89 @@ class SeasonHubPage(QWizardPage):
         manu_standings = ([{'name': m, 'points': data['manu_total'][m]} for m in data['manu_sorted']]
                           if data is not None else [])
 
+        wiz = self._wiz
+        season_df = wiz.season_df
+
+        # "Between grand prix" recap: shown at a round boundary once at least
+        # one round has been completed this season — session_index 0 (next up is
+        # a fresh weekend's Practice) AND circuit_index > 0. It keeps the JUST-
+        # FINISHED GP on the left and its result in the middle while previewing
+        # the NEXT GP (see below). Derived from persistent state, not a one-shot
+        # flag, so it survives quitting and CONTINUE-ing while on the recap (the
+        # round-granular save resumes exactly at this boundary anyway). Round 1
+        # (circuit_index 0) stays the normal "TO NEXT SESSION" hub.
+        show_next_gp = wiz.session_index == 0 and wiz.circuit_index > 0
+        self._hub.cards()[0].set_text('TO NEXT GRAND PRIX' if show_next_gp else 'TO NEXT SESSION')
+
         # circuit_index always points at the round about to be played next
-        # (see p4_championship.ChampionshipPage._bank_round() incrementing
-        # it right after a round is banked), so it's valid whether the hub
-        # is opened fresh pre-season or reopened mid-season via resume_at_hub().
-        season_df = self._wiz.season_df
-        next_row = (season_df.iloc[self._wiz.circuit_index]
-                    if season_df is not None and 0 <= self._wiz.circuit_index < len(season_df)
-                    else None)
-        next_circuit_name = str(next_row['circuit_name']) if next_row is not None else None
-        track_winners, track_polesitters = _track_history(seasons_for_rec, next_circuit_name)
-        brlc, blc = _track_records(seasons_for_rec, next_circuit_name)
+        # (p4._bank_round() bumps it after a round is banked). On the between-GP
+        # landing the left column / records / track history describe the round
+        # just finished (circuit_index - 1); otherwise the upcoming one.
+        def _season_row(idx):
+            return (season_df.iloc[idx]
+                    if season_df is not None and 0 <= idx < len(season_df) else None)
+        play_row = _season_row(wiz.circuit_index)          # the round to be played next
+        display_row = _season_row(wiz.circuit_index - 1) if show_next_gp else play_row
+        next_gp_row = play_row if show_next_gp else None    # middle preview of what's next
+
+        display_circuit_name = str(display_row['circuit_name']) if display_row is not None else None
+        track_winners, track_polesitters = _track_history(seasons_for_rec, display_circuit_name)
+        brlc, blc = _track_records(seasons_for_rec, display_circuit_name)
 
         trend = _rider_position_trend(current_rounds_detail or [], name or '')
-        upcoming = SESSION_NAMES[self._wiz.session_index % len(SESSION_NAMES)]
-        favourites = _winner_favourites(getattr(self._wiz, 'df', None))
+        upcoming = SESSION_NAMES[wiz.session_index % len(SESSION_NAMES)]
+
+        # Weather is always for the round you'll play next (play_row) so the
+        # forecast RacePage reuses stays right, even on the between-GP landing
+        # where the weather block itself is hidden.
+        play_country = str(play_row['country']) if play_row is not None else None
+        day = SESSION_DAY[wiz.session_index % len(SESSION_DAY)]
+        if wiz.weekend_weather is None or wiz.weekend_weather.get('day') != day:
+            wiz.weekend_weather = _roll_session_weather(play_country)
+            wiz.weekend_weather['day'] = day
+        weather = wiz.weekend_weather
+
+        # Middle bottom card: the between-GP landing shows the finished GP's
+        # top-5 point scorers (across its two races); otherwise the winner-
+        # favourites estimate for the upcoming GP.
+        favourites = None
+        gp_result = None
+        next_gp_country = str(next_gp_row['country']) if next_gp_row is not None else None
+        if show_next_gp:
+            gp_result = _gp_point_scorers(live_rounds[-1]) if live_rounds else []
+        else:
+            # Recent form spans archived seasons + the live one so an early-
+            # season round still finds its "last 5".
+            form_rounds = []
+            for s in seasons:
+                form_rounds.extend(s.get('rounds_detail') or [])
+            form_rounds.extend(live_rounds)
+            form_scores = _form_scores(form_rounds, limit=5)
+            # Race 2 only: +3/+2/+1 aggression for this circuit's Race-1 podium.
+            race1_podium = None
+            if wiz.session_index >= 4 and wiz.race_results:
+                r1 = wiz.race_results[0]
+                race1_podium = {str(r['name']): _FAV_PODIUM_AGGRO[int(r['pos'])]
+                                for _, r in r1.iterrows()
+                                if not bool(r['dnf']) and int(r['pos']) in _FAV_PODIUM_AGGRO}
+            favourites = _winner_favourites(
+                getattr(wiz, 'df', None), circuit=play_row,
+                session_index=wiz.session_index, form_scores=form_scores,
+                grid_df=wiz.grid_all_df, is_wet=bool(weather.get('is_wet')),
+                race1_podium=race1_podium)
+
         self._hub_dashboard.load(standings, recent_races, honours,
                                  team_standings, manu_standings,
                                  data['names'] if data is not None else {},
-                                 next_circuit=next_row,
+                                 next_circuit=display_row,
                                  track_winners=track_winners,
                                  track_polesitters=track_polesitters,
                                  brlc=brlc, blc=blc,
                                  upcoming_session=upcoming,
-                                 favourites=favourites)
+                                 weather=weather,
+                                 favourites=favourites,
+                                 next_gp_country=next_gp_country,
+                                 gp_result=gp_result)
         self._season_stats_screen.load(standings, name or '', honours, trend)
 
         self._calendar.load(self._wiz.season_df)
@@ -2504,16 +2959,24 @@ class SeasonHubPage(QWizardPage):
             bar.setValue(0)
 
     def initializePage(self):
-        # Fresh arrival from Calendar (season start): begin the weekend at the
-        # first session. resume_at_hub() (mid-season re-entry) deliberately
-        # leaves session_index alone so the round continues where it paused.
+        # Fresh arrival from Calendar: begin the weekend at the first session.
+        # resume_at_hub() (mid-weekend re-entry) deliberately leaves
+        # session_index alone so the round continues where it paused.
         self._wiz.session_index = 0
         self._refresh_data()
         self._hub_focus = 0
         self._sync_hub_focus()
-        self._stack.setCurrentIndex(0)
-        self._wiz.pause_music()     # the intro clip has its own audio
-        self._intro.start()
+        if self._wiz.circuit_index == 0:
+            # Start of a season, before Round 1 — play the intro clip.
+            self._stack.setCurrentIndex(0)
+            self._wiz.pause_music()     # the intro clip has its own audio
+            self._intro.start()
+        else:
+            # CONTINUE'ing mid-season (before Round 2+): the intro is a
+            # new-season beat, so skip it and drop straight onto the dashboard,
+            # the same landing resume_at_hub()/_show_hub() use.
+            self._wiz.resume_music()
+            self._stack.setCurrentIndex(1)
         self.setFocus()     # keep focus off the video widget so Esc/Enter both reach handle_key
 
     def resume_at_hub(self):

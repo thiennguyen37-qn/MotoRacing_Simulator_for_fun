@@ -1,12 +1,14 @@
 import json
 from pathlib import Path
 
+import numpy as np
+
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QWidget,
                               QLabel, QStackedWidget, QFrame, QDialog, QSizePolicy,
                               QSpacerItem, QGraphicsOpacityEffect)
 from PyQt6.QtGui import (QFont, QPainter, QColor, QPixmap, QPainterPath,
                           QLinearGradient, QPen)
-from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint,
+from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint, QSize,
                           pyqtSignal, QPropertyAnimation, QParallelAnimationGroup,
                           QSequentialAnimationGroup, QEasingCurve, QAbstractAnimation)
 
@@ -17,6 +19,7 @@ from app.pages.p_history import (_aggregate_riders, _build_rider_race_matrix,
                                   _stat_tiles, _TOTAL_COLS, _pos_bg,
                                   _flag_pixmap, _season_tables_data, _honours_data)
 from app.widgets.table_utils import TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR, row_bg
+from app.wizard import SESSION_NAMES
 from src.simulator import POINTS
 from src.engine import fmt_lap
 
@@ -187,9 +190,9 @@ class _TabButton(QFrame):
 
 
 class _TopTabBar(QWidget):
-    """A flat row of _TabButtons — reused for the main hub (To Next Race /
-    Your Profile / Calendar / Main Menu) and for the Your Profile sub-hub
-    (Basic Info / Results / Rating)."""
+    """A flat row of _TabButtons — reused for the main hub (To Next Session /
+    Your Profile / Calendar / Season Stats / Main Menu) and for the Your
+    Profile sub-hub (Basic Info / Results / Rating)."""
 
     def __init__(self, labels: list):
         super().__init__()
@@ -875,6 +878,17 @@ class _ElideLabel(QLabel):
         self._full = text
         self.setMinimumWidth(0)
 
+    def minimumSizeHint(self):
+        # It elides, so it must never impose its full text width as a layout
+        # minimum — otherwise a row of these would keep its whole column too
+        # wide to shrink on a narrow window. Report ~zero width (keep height).
+        return QSize(0, super().minimumSizeHint().height())
+
+    def sizeHint(self):
+        # Same reasoning for the preferred width: lean on the row's stretch to
+        # size it, not the (possibly long) full text.
+        return QSize(0, super().sizeHint().height())
+
     def setFullText(self, text: str):
         self._full = text
         self._apply_elide()
@@ -1167,15 +1181,16 @@ class _StandingsPanel(QWidget):
             ph.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
             self._rows_lay.addWidget(ph)
             return
-        # Always exactly _PAGE_SIZE slots — a last page with fewer real
-        # entries (e.g. 12 total -> page 3 is just #11-12) pads out with
-        # empty placeholders instead of shrinking. Besides matching
-        # _mini_board's own look, this keeps every page the same height,
-        # which the transition overlay relies on (see _grab_snapshot).
+        # Always exactly _PAGE_SIZE slots so every page keeps the same height
+        # (the transition overlay relies on it — see _grab_snapshot) and the
+        # panel never resizes as it cycles. A last page with fewer real
+        # entries leaves its trailing slots as blank, fully transparent rows
+        # rather than the old dim "—" placeholders.
         start = self._page_index * self._PAGE_SIZE
         window = standings[start:start + self._PAGE_SIZE]
         for i in range(self._PAGE_SIZE):
             pos = start + i + 1
+            filled = i < len(window)
             row = QFrame()
             # Fixed height: a Preferred-height row is fair game for the
             # layout to squeeze when the column runs short, and a squeezed
@@ -1184,29 +1199,43 @@ class _StandingsPanel(QWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(10, 0, 10, 0)
             rl.setSpacing(8)
-            pos_lbl = QLabel(str(pos)); pos_lbl.setFixedWidth(24)
+            pos_lbl = QLabel(str(pos) if filled else ''); pos_lbl.setFixedWidth(24)
             name_lbl = _ElideLabel()
+            # Rider standings show the manufacturer between the name and the
+            # points (values only, no header) — teams/manufacturers already
+            # carry that identity in their own name column, so only RIDER mode
+            # gets the extra column.
+            manu_lbl = _ElideLabel() if mode == 'RIDER' else None
+            if manu_lbl is not None:
+                # Kept narrow (the longest manufacturer, "KAWASAKI", is ~72px)
+                # and pushed to the right so the rider-name column stays wide
+                # enough for long names like "JUAN FRANCISCO VALDES".
+                manu_lbl.setFixedWidth(78)
             pts_lbl = QLabel(); pts_lbl.setFixedWidth(44)
             pts_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            for l in (pos_lbl, name_lbl, pts_lbl):
+            labels = [pos_lbl, name_lbl, pts_lbl] + ([manu_lbl] if manu_lbl is not None else [])
+            for l in labels:
                 l.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
 
-            if i < len(window):
+            if filled:
                 s = window[i]
                 bg = row_bg(self._row_color(mode, s))
                 row.setStyleSheet(f'background: {bg.name()}; border-radius: 6px; border: none;')
-                text_color = '#ffffff'
                 name_lbl.setFullText(str(s.get('name', '')).upper())
+                if manu_lbl is not None:
+                    manu_lbl.setFullText(str(s.get('manufacturer', '')).upper())
                 pts_lbl.setText(str(int(s.get('points', 0))))
             else:
-                row.setStyleSheet('background: rgba(255,255,255,10); border-radius: 6px; border: none;')
-                text_color = '#5a5a72'
-                name_lbl.setFullText('—')
+                # Empty slot: invisible, but still _DASH_ROW_H tall so the
+                # panel's overall size doesn't change page to page.
+                row.setStyleSheet('background: transparent; border: none;')
 
-            for l in (pos_lbl, name_lbl, pts_lbl):
-                l.setStyleSheet(f'color:{text_color}; background:transparent; border:none;')
+            for l in labels:
+                l.setStyleSheet('color:#ffffff; background:transparent; border:none;')
             rl.addWidget(pos_lbl)
             rl.addWidget(name_lbl, 1)
+            if manu_lbl is not None:
+                rl.addWidget(manu_lbl)
             rl.addWidget(pts_lbl)
             self._rows_lay.addWidget(row)
 
@@ -1369,14 +1398,16 @@ class _OverallStatsPanel(QWidget):
 _INFO_ROW_H = 22   # locked, same no-squeeze rule as the standings rows
 
 
-def _info_row(label: str) -> tuple:
+def _info_row(label: str, label_color: str = '#9a9ab2') -> tuple:
     """label:value line for _NextRacePanel's circuit-info/records block — a
-    small dim caption on the left, an eliding bold value on the right (a
+    small caption on the left, an eliding bold value on the right (a
     long circuit name or a "time — HOLDER — year" record string both need
     to shrink gracefully instead of overrunning the card). The caption
     keeps its natural width (a fixed one clipped "LONGEST STRAIGHT" mid-
     word) and the row's height is locked so a squeezed column clips the
-    card's bottom edge cleanly instead of mashing lines into each other."""
+    card's bottom edge cleanly instead of mashing lines into each other.
+    `label_color` defaults to the dim GP-Info caption; the Upcoming Session
+    card passes white."""
     row = QWidget()
     row.setStyleSheet('background: transparent;')
     row.setFixedHeight(_INFO_ROW_H)
@@ -1385,7 +1416,7 @@ def _info_row(label: str) -> tuple:
     rl.setSpacing(8)
     lbl = QLabel(label)
     lbl.setFont(QFont('Segoe UI', 8, QFont.Weight.Bold))
-    lbl.setStyleSheet('color:#9a9ab2; letter-spacing:1px; background:transparent; border:none;')
+    lbl.setStyleSheet(f'color:{label_color}; letter-spacing:1px; background:transparent; border:none;')
     val = _ElideLabel()
     val.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
     val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -1602,8 +1633,185 @@ class _TrackHistoryPanel(QWidget):
             _play_transition(self, self._rows_holder, snapshot, transition)
 
 
-_HUB_SIDEBAR_W = 380   # compact right-hand column
+class _UpcomingSessionPanel(QWidget):
+    """Middle-column card naming the weekend session the player runs next
+    (Practice, Qualifying 1/2, Race 1/2 — see wizard.SESSION_NAMES), then a
+    second divider (like _NextRacePanel's) and a small conditions block:
+    current weather, temperature and humidity. Same heading+divider look and
+    the same _info_row style as every other dashboard panel."""
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 14, 14, 14)
+        lay.setSpacing(0)
+
+        lay.addWidget(_panel_title('UPCOMING SESSION'))
+        lay.addItem(_soft_gap(18))
+
+        self._name_lbl = QLabel('—')
+        self._name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._name_lbl.setWordWrap(True)
+        self._name_lbl.setFont(QFont('Segoe UI', 17, QFont.Weight.Bold))
+        self._name_lbl.setStyleSheet('color:#ffffff; letter-spacing:1px; background:transparent; border:none;')
+        lay.addWidget(self._name_lbl)
+        lay.addItem(_soft_gap(16))
+
+        border2 = QFrame()
+        border2.setFixedHeight(1)
+        border2.setStyleSheet('background: rgba(255,255,255,60); border:none;')
+        lay.addWidget(border2)
+        lay.addItem(_soft_gap(14))
+
+        # White captions (not GP Info's dim grey), and the three rows are
+        # spread with stretches between them so they fill down to near the
+        # card's bottom rather than huddling under the divider with a big
+        # empty gap below.
+        self._weather_row, self._weather_val = _info_row('CURRENT WEATHER', label_color='#ffffff')
+        self._temp_row,    self._temp_val    = _info_row('TEMPERATURE',     label_color='#ffffff')
+        self._humid_row,   self._humid_val   = _info_row('HUMIDITY',        label_color='#ffffff')
+        lay.addWidget(self._weather_row)
+        lay.addStretch(1)
+        lay.addWidget(self._temp_row)
+        lay.addStretch(1)
+        lay.addWidget(self._humid_row)
+
+    def load(self, session_name: str, weather: str = '—',
+             temperature: str = '—', humidity: str = '—'):
+        self._name_lbl.setText(str(session_name).upper())
+        self._weather_val.setFullText(str(weather))
+        self._temp_val.setFullText(str(temperature))
+        self._humid_val.setFullText(str(humidity))
+
+
+def _winner_favourites(df, limit: int = 3, temp: float = 3.0) -> list:
+    """Top `limit` riders by a theoretical win chance for the upcoming Grand
+    Prix. Provisional model (to refine later, like the weather block): each
+    rider's power = mean of the STATS ratings, turned into a probability with
+    a softmax (temp spreads it — lower = more top-heavy). Returns dicts with
+    name / team / manufacturer / pct, highest first."""
+    if df is None or len(df) == 0:
+        return []
+    stat_cols = [c for c, _, _ in STATS]
+    powers = df[stat_cols].mean(axis=1).to_numpy(dtype=float)
+    e = np.exp((powers - powers.max()) / temp)
+    w = e / e.sum()
+    order = list(np.argsort(-w))[:limit]
+    out = []
+    for i in order:
+        row = df.iloc[int(i)]
+        out.append({'name': str(row['name']), 'team': str(row['team']),
+                    'manufacturer': str(row['manufacturer']), 'pct': float(w[i] * 100)})
+    return out
+
+
+class _WinnerFavouritesPanel(QWidget):
+    """Bottom card of the middle column: the three riders most likely (in
+    theory) to win the upcoming Grand Prix, each in the same team/manufacturer
+    colour the standings rows use, with their win chance on the right. The
+    three rows are spread down the card so its bottom sits level with Recent
+    Form and Last 5 Winners."""
+
+    _SLOTS = 3
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 12)
+        lay.setSpacing(0)
+
+        # The title is long, so it rides a notch smaller than the other panels'
+        # 9pt headers and may wrap to two lines on a narrow window.
+        title = QLabel('GRAND PRIX WINNER FAVOURITES')
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setWordWrap(True)
+        # Let it wrap rather than dictate the card's minimum width — otherwise
+        # the long title would keep the whole middle column ~354px wide and stop
+        # the side columns from ever reclaiming that space on a narrow window.
+        title.setMinimumWidth(1)
+        title.setFont(QFont('Segoe UI', 8, QFont.Weight.Bold))
+        title.setStyleSheet('color:#ffffff; letter-spacing:1px; background:transparent; border:none;')
+        lay.addWidget(title)
+        lay.addItem(_soft_gap(8))
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet('background: rgba(255,255,255,60); border:none;')
+        lay.addWidget(line)
+        lay.addItem(_soft_gap(10))
+
+        self._rows_holder = QWidget()
+        self._rows_holder.setStyleSheet('background: transparent;')
+        self._rows_lay = QVBoxLayout(self._rows_holder)
+        self._rows_lay.setContentsMargins(0, 0, 0, 0)
+        self._rows_lay.setSpacing(0)
+        lay.addWidget(self._rows_holder, 1)   # fills the card so rows spread
+
+    def load(self, favourites: list):
+        while self._rows_lay.count():
+            item = self._rows_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+        if not favourites:
+            ph = QLabel('Not enough data yet.')
+            ph.setWordWrap(True)
+            ph.setFont(QFont('Segoe UI', 10))
+            ph.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
+            self._rows_lay.addStretch(1)
+            self._rows_lay.addWidget(ph)
+            self._rows_lay.addStretch(1)
+            return
+        self._rows_lay.addStretch(1)
+        for i in range(self._SLOTS):
+            row = QFrame()
+            row.setFixedHeight(_DASH_ROW_H)
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(10, 0, 10, 0)
+            rl.setSpacing(8)
+            pos_lbl = QLabel(str(i + 1)); pos_lbl.setFixedWidth(24)
+            name_lbl = _ElideLabel()
+            manu_lbl = _ElideLabel(); manu_lbl.setFixedWidth(78)
+            pct_lbl = QLabel(); pct_lbl.setFixedWidth(48)
+            pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            for l in (pos_lbl, name_lbl, manu_lbl, pct_lbl):
+                l.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+
+            if i < len(favourites):
+                f = favourites[i]
+                color = TEAM_COLOR.get(f.get('team', '')) or MANU_COLOR.get(
+                    f.get('manufacturer', ''), _DEFAULT_COLOR)
+                row.setStyleSheet(f'background: {row_bg(color).name()}; border-radius: 6px; border: none;')
+                name_lbl.setFullText(str(f.get('name', '')).upper())
+                manu_lbl.setFullText(str(f.get('manufacturer', '')).upper())
+                pct_lbl.setText(f"{f.get('pct', 0):.0f}%")
+            else:
+                row.setStyleSheet('background: transparent; border: none;')
+                pos_lbl.setText('')
+
+            for l in (pos_lbl, name_lbl, manu_lbl, pct_lbl):
+                l.setStyleSheet('color:#ffffff; background:transparent; border:none;')
+            rl.addWidget(pos_lbl)
+            rl.addWidget(name_lbl, 1)
+            rl.addWidget(manu_lbl)
+            rl.addWidget(pct_lbl)
+            self._rows_lay.addWidget(row)
+            self._rows_lay.addStretch(1)
+
+
+_HUB_SIDEBAR_W = 380   # compact right-hand column (preferred width)
 _HUB_LEFT_W = 460      # left column runs a bit wider — room for the circuit-info lines
+_HUB_MID_GAP = 26      # fixed breathing space between the middle card and each side column
+_HUB_MID_H   = 244     # fixed height so its bottom lines up with GP Info's LONGEST STRAIGHT row
+_HUB_SIDE_MARGIN = 56  # dashboard's outer left/right margin
+# On a window too narrow to hold the preferred widths, the two side columns
+# shrink (never below these floors, where their inner rows still fit) so the
+# board always fits without a scrollbar — see _relayout_columns. The right
+# floor is high because Recent Form's five fixed 60px flag boxes can't shrink.
+_HUB_LEFT_MIN  = 268
+_HUB_RIGHT_MIN = 360
+_HUB_MID_MIN   = 210   # the middle column never gets squeezed below this
 
 
 class _HubDashboard(QWidget):
@@ -1616,10 +1824,11 @@ class _HubDashboard(QWidget):
         super().__init__()
         self.setStyleSheet('background: transparent;')
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(56, 0, 56, 40)
+        outer.setContentsMargins(_HUB_SIDE_MARGIN, 0, _HUB_SIDE_MARGIN, 40)
         outer.setSpacing(0)
 
         left = QWidget()
+        self._left = left
         left.setFixedWidth(_HUB_LEFT_W)
         left.setStyleSheet('background: transparent;')
         left_lay = QVBoxLayout(left)
@@ -1641,14 +1850,44 @@ class _HubDashboard(QWidget):
             left_lay.addWidget(wrap)
         outer.addWidget(left)
 
-        # Open gap in the middle (background art shows through). left(460) +
-        # right(380) + the 56+56 side margins == 952 < the window's 1060
-        # minimum width, so this stretch is always at least ~108px — the two
-        # columns can never touch, let alone overlap. (The overlap before was
-        # the since-removed middle tiles forcing extra width in here.)
-        outer.addStretch(1)
+        # Middle column: the "Upcoming session" card fills the whole gap between
+        # the two fixed side columns, leaving only a small fixed _HUB_MID_GAP on
+        # each side. Giving it the layout's stretch (addWidget(..., 1)) rather
+        # than flanking it with expanding spacers keeps that gap constant and
+        # tight at every window width — it grows/shrinks with the window instead
+        # of leaving a big empty margin on a wide screen or overflowing the
+        # columns off-screen on a narrow one. Top-aligned (fixed-height card,
+        # then a trailing stretch) so its bottom lands level with GP Info's
+        # CORNERS row.
+        outer.addSpacing(_HUB_MID_GAP)
+
+        middle = QWidget()
+        self._middle = middle
+        middle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        middle.setStyleSheet('background: transparent;')
+        mid_lay = QVBoxLayout(middle)
+        mid_lay.setContentsMargins(0, 0, 0, 0)
+        mid_lay.setSpacing(12)
+        self._upcoming = _UpcomingSessionPanel()
+        self._upcoming_wrap = _TintWrap(self._upcoming, margin=0)
+        # Starting height; _sync_upcoming_height() then pins it to the Standings
+        # card's actual height so the two cards' bottoms line up exactly (see
+        # resizeEvent / load).
+        self._upcoming_wrap.setFixedHeight(_HUB_MID_H)
+        mid_lay.addWidget(self._upcoming_wrap)
+        # Winner-favourites card fills the rest of the column (Expanding), so
+        # its bottom lands level with Recent Form (right) and Last 5 (left),
+        # whose last cards expand the same way.
+        self._favourites = _WinnerFavouritesPanel()
+        fav_wrap = _TintWrap(self._favourites, margin=0)
+        fav_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        mid_lay.addWidget(fav_wrap)
+        outer.addWidget(middle, 1)
+
+        outer.addSpacing(_HUB_MID_GAP)
 
         right = QWidget()
+        self._right = right
         right.setFixedWidth(_HUB_SIDEBAR_W)
         right.setStyleSheet('background: transparent;')
         right_lay = QVBoxLayout(right)
@@ -1658,9 +1897,12 @@ class _HubDashboard(QWidget):
         self._standings = _StandingsPanel()
         self._overall_stats = _OverallStatsPanel()
         self._form = _FormPanel()
+        self._standings_wrap = None
         right_panels = (self._standings, self._overall_stats, self._form)
         for i, panel in enumerate(right_panels):
             wrap = _TintWrap(panel, margin=0)
+            if panel is self._standings:
+                self._standings_wrap = wrap
             # Maximum: a card may shrink below its natural height — its
             # internal _soft_gap()s collapse first, so rows stay intact —
             # but never grows past it on its own. A hard Fixed policy here
@@ -1676,16 +1918,98 @@ class _HubDashboard(QWidget):
 
         outer.addWidget(right)
 
+    def minimumSizeHint(self):
+        # Report the *floor* width (side columns at their _MIN, middle at
+        # _HUB_MID_MIN), not the width the fixed columns currently occupy —
+        # otherwise the parent layout would never size the board below the
+        # preferred 460/380 and _relayout_columns() could never shrink them to
+        # a narrow window. Height is left as Qt computes it, so the board is
+        # never squeezed shorter than its content (no vertical overlap).
+        s = super().minimumSizeHint()
+        mid_min = max(_HUB_MID_MIN, self._middle.minimumSizeHint().width())
+        min_w = (_HUB_LEFT_MIN + _HUB_RIGHT_MIN + mid_min
+                 + _HUB_SIDE_MARGIN * 2 + _HUB_MID_GAP * 2)
+        return QSize(min_w, s.height())
+
+    def _relayout_columns(self):
+        """Keep the whole board inside the window width without a scrollbar:
+        the side columns sit at their preferred 460 / 380 whenever there's
+        room, and shrink proportionally (never past their _MIN floors) on a
+        narrower window. The middle column — Expanding between them — always
+        fills whatever is left, down to _HUB_MID_MIN. This is what lets the app
+        window be resized freely without the columns overlapping."""
+        avail = self.width()
+        overhead = _HUB_SIDE_MARGIN * 2 + _HUB_MID_GAP * 2
+        # The middle column can't be squeezed below the width its own content
+        # needs, so reserve its actual minimum first, then hand what's left to
+        # the two side columns.
+        mid_min = max(_HUB_MID_MIN, self._middle.minimumSizeHint().width())
+        room = avail - overhead - mid_min               # width for the two side columns
+        # How much must come off the preferred side widths, split in proportion
+        # to each column's shrinkable range (the right column barely moves —
+        # its flag boxes floor it at _HUB_RIGHT_MIN).
+        excess = (_HUB_LEFT_W + _HUB_SIDEBAR_W) - room
+        if excess <= 0:
+            lw, rw = _HUB_LEFT_W, _HUB_SIDEBAR_W
+        else:
+            l_range = _HUB_LEFT_W - _HUB_LEFT_MIN
+            r_range = _HUB_SIDEBAR_W - _HUB_RIGHT_MIN
+            total = l_range + r_range
+            if excess >= total or total <= 0:
+                lw, rw = _HUB_LEFT_MIN, _HUB_RIGHT_MIN   # fully shrunk (window below the board min)
+            else:
+                lw = _HUB_LEFT_W    - round(excess * l_range / total)
+                rw = _HUB_SIDEBAR_W - round(excess * r_range / total)
+        if self._left.width() != lw:
+            self._left.setFixedWidth(lw)
+        if self._right.width() != rw:
+            self._right.setFixedWidth(rw)
+
+    def _sync_upcoming_height(self):
+        """Pin the middle "Upcoming session" card to the same height as the
+        Standings card so their bottom edges line up (both start at the top of
+        the dashboard row). The Standings height is constant — 5 fixed rows —
+        so this only needs to run once the panel has been laid out.
+
+        Skipped while the board is hidden: a hidden Standings card reports only
+        its title height (~53px), and pinning to that collapsed the Upcoming
+        card's content on top of itself until the next resize. showEvent
+        re-runs this once the real height is known."""
+        if self._standings_wrap is None or not self.isVisible():
+            return
+        h = self._standings_wrap.sizeHint().height()
+        if h > 0 and self._upcoming_wrap.height() != h:
+            self._upcoming_wrap.setFixedHeight(h)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # First real layout: the board may have been load()ed while hidden
+        # (during the season intro), so re-run both fits now that sizes are
+        # measurable. Deferred a tick so the show-time layout has settled.
+        self._relayout_columns()
+        QTimer.singleShot(0, self._sync_upcoming_height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._relayout_columns()
+        self._sync_upcoming_height()
+
     def load(self, standings: list, races: list, honours: dict | None,
             team_standings: list, manu_standings: list,
             names_map: dict | None = None, next_circuit=None,
             track_winners: list | None = None, track_polesitters: list | None = None,
-            brlc: tuple | None = None, blc: tuple | None = None):
+            brlc: tuple | None = None, blc: tuple | None = None,
+            upcoming_session: str = '', favourites: list | None = None):
         self._standings.load(standings, team_standings, manu_standings)
         self._form.load(races)
         self._overall_stats.load(honours, names_map)
         self._next_race.load(next_circuit, brlc, blc)
         self._track_history.load(track_winners or [], track_polesitters or [], names_map)
+        self._upcoming.load(upcoming_session)
+        self._favourites.load(favourites or [])
+        # Rows are in place now — match the Standings card's height on the next
+        # tick (after the layout settles).
+        QTimer.singleShot(0, self._sync_upcoming_height)
 
 
 # ── Season Stats tab: STANDINGS / YOUR RESULT (same sub-hub pattern as
@@ -1994,7 +2318,7 @@ class SeasonHubPage(QWizardPage):
         self._intro.finished.connect(self._show_hub)
         self._stack.addWidget(self._intro)                      # 0
 
-        self._hub = _TopTabBar(['TO NEXT RACE', 'YOUR PROFILE', 'CALENDAR', 'SEASON STATS', 'MAIN MENU'])
+        self._hub = _TopTabBar(['TO NEXT SESSION', 'YOUR PROFILE', 'CALENDAR', 'SEASON STATS', 'MAIN MENU'])
         self._hub_dashboard = _HubDashboard()
         hub_page = QWidget()
         hub_page.setStyleSheet('background: transparent;')
@@ -2003,16 +2327,17 @@ class SeasonHubPage(QWizardPage):
         hub_page_lay.setSpacing(0)
         hub_page_lay.addWidget(self._hub)
         hub_page_lay.addSpacing(30)
-        # The dashboard sits inside a scroll area because a window shorter
-        # than its ~650px minimum makes a bare layout squeeze children
-        # BELOW their fixed heights ("take from the biggest first"),
-        # collapsing gaps and clipping card rows mid-glyph. The scroll area
-        # never renders its widget under the widget's minimum size — a
-        # too-short window shows the same thin scrollbar the Calendar uses,
-        # with every card intact. (This was in once before and got reverted
-        # over ghosting that turned out to be _play_transition leaking
-        # overlays when interrupted — that leak is fixed separately now.)
+        # The dashboard sits in a scroll area with its scrollbars HIDDEN. Two
+        # things keep the board tidy at any window size:
+        #  - width: the side columns shrink proportionally on a narrow window
+        #    (_HubDashboard._relayout_columns), so nothing overlaps.
+        #  - height: the scroll area holds the board at (at least) its own
+        #    minimum height, so a short window never squeezes a card below its
+        #    rows (which used to clip the last standings row) — the overflow is
+        #    just cropped off the bottom instead. At the app's normal size the
+        #    whole board fits, with no scrollbar and nothing cropped.
         self._dash_scroll = _make_scroll_area()
+        self._dash_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._dash_scroll.setWidget(self._hub_dashboard)
         hub_page_lay.addWidget(self._dash_scroll, 1)
         self._stack.addWidget(self._wrap(hub_page))               # 1
@@ -2160,13 +2485,17 @@ class SeasonHubPage(QWizardPage):
         brlc, blc = _track_records(seasons_for_rec, next_circuit_name)
 
         trend = _rider_position_trend(current_rounds_detail or [], name or '')
+        upcoming = SESSION_NAMES[self._wiz.session_index % len(SESSION_NAMES)]
+        favourites = _winner_favourites(getattr(self._wiz, 'df', None))
         self._hub_dashboard.load(standings, recent_races, honours,
                                  team_standings, manu_standings,
                                  data['names'] if data is not None else {},
                                  next_circuit=next_row,
                                  track_winners=track_winners,
                                  track_polesitters=track_polesitters,
-                                 brlc=brlc, blc=blc)
+                                 brlc=brlc, blc=blc,
+                                 upcoming_session=upcoming,
+                                 favourites=favourites)
         self._season_stats_screen.load(standings, name or '', honours, trend)
 
         self._calendar.load(self._wiz.season_df)
@@ -2175,6 +2504,10 @@ class SeasonHubPage(QWizardPage):
             bar.setValue(0)
 
     def initializePage(self):
+        # Fresh arrival from Calendar (season start): begin the weekend at the
+        # first session. resume_at_hub() (mid-season re-entry) deliberately
+        # leaves session_index alone so the round continues where it paused.
+        self._wiz.session_index = 0
         self._refresh_data()
         self._hub_focus = 0
         self._sync_hub_focus()
@@ -2195,7 +2528,16 @@ class SeasonHubPage(QWizardPage):
         self.setFocus()
 
     def nextId(self):
-        return self._wiz.ID_PRACTICE
+        # "To Next Session" navigates to the page owning the upcoming session:
+        # Practice(0) -> ID_PRACTICE, Qualifying 1/2 -> ID_QUALI, Race 1/2 ->
+        # ID_RACE. The pages themselves run only the session at session_index
+        # and hand back to the hub afterwards (see return_to_hub_after_session).
+        idx = self._wiz.session_index
+        if idx <= 0:
+            return self._wiz.ID_PRACTICE
+        if idx <= 2:
+            return self._wiz.ID_QUALI
+        return self._wiz.ID_RACE
 
     # ── Hub navigation ────────────────────────────────────────────────────────
 
@@ -2224,12 +2566,6 @@ class SeasonHubPage(QWizardPage):
             if key in (K.Key_Left, K.Key_Right):
                 self._hub_focus = (self._hub_focus + (1 if key == K.Key_Right else -1)) % 5
                 self._sync_hub_focus()
-            elif key in (K.Key_Up, K.Key_Down):
-                # No-op unless the window is short enough that the
-                # dashboard's scrollbar has kicked in.
-                bar = self._dash_scroll.verticalScrollBar()
-                if bar is not None:
-                    bar.setValue(bar.value() + (-60 if key == K.Key_Up else 60))
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
                 (self._go_next, self._open_profile, self._open_calendar,
                  self._open_season_stats_screen, self._confirm_main_menu)[self._hub_focus]()

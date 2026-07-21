@@ -2700,19 +2700,35 @@ class _SeasonStatsScreen(QWidget):
 
 # ── Between-GP map transition ─────────────────────────────────────────────────
 
-class _GpMapTransition(QWidget):
-    """Full-screen screen shown when the player leaves the between-GP recap
-    hub toward the next round: a live world map camera-flies from the GP just
-    finished to the next one's country (WorldMapWidget.fly_to — zoom out to
-    hold both flags on screen, then zoom into the destination), edge to edge
-    with no caption. Emits `finished` once the fly-in lands (or the player
-    skips it), to move on to that GP's Practice."""
+class GpMapPage(QWizardPage):
+    """Career only: full-screen page between the between-GP recap hub and the
+    next round — a live world map camera-flies from the GP just finished to
+    the next one's country (WorldMapWidget.fly_to — zoom out to hold both
+    flags on screen, then zoom into the destination), edge to edge with no
+    caption.
 
-    finished = pyqtSignal()
+    A genuine QWizardPage (not a sub-state inside SeasonHubPage's own
+    QStackedWidget, which is how this started out): leaving it needs to be a
+    real QWizard page transition — hosting the live map as just one more page
+    in SeasonHubPage's internal stack left stale ghosted frames behind when
+    landing back on the dashboard (its matplotlib canvas, a
+    FigureCanvasQTAgg, doesn't tear down cleanly on an internal-only stack
+    switch the way it does on an actual page hide/show).
 
-    def __init__(self):
+    Landing and leaving are two separate steps, both driven by Enter:
+      - mid-flight, Enter cuts the pan short and lands immediately;
+      - once landed (naturally or via that cut-short), the view just sits
+        there — it does NOT auto-advance — and a further Enter is what
+        actually moves on (wiz.next(), back to the Season Hub — see
+        nextId())."""
+
+    def __init__(self, wiz):
         super().__init__()
+        self._wiz = wiz
+        self.setTitle('')
+        self.setSubTitle('')
         self._active = False
+        self._landed = False
         self._from_country = None
         self._to_country = None
         self.setStyleSheet('background: #08080e;')
@@ -2725,47 +2741,51 @@ class _GpMapTransition(QWidget):
 
     def preload(self, from_country: str, to_country: str):
         """Kick off the flight's capture in the background as soon as the
-        destination is known (see WorldMapWidget.preload_fly) — called from
-        the recap hub, well before the player presses "To next grand prix",
-        so start()'s fly_to() below usually finds it already cached."""
-        self._map.preload_fly(from_country, to_country)
-
-    def load(self, from_country: str, to_country: str):
+        destination is known (see WorldMapWidget.preload_fly), and remember
+        the pair for initializePage() below — called from the recap hub,
+        well before the player presses "To next grand prix", so the fly_to()
+        call below usually finds it already cached."""
         self._from_country = from_country
         self._to_country = to_country
+        self._map.preload_fly(from_country, to_country)
 
-    def start(self):
+    def initializePage(self):
         self._active = True
-        self._map.fly_to(self._from_country, self._to_country, on_done=self._finish)
+        self._landed = False
+        self._map.fly_to(self._from_country, self._to_country, on_done=self._on_landed)
+        self.setFocus()
 
-    def skip(self):
-        if self._active:
-            self._map.fly_skip(self._to_country, on_done=self._finish)
+    def _on_landed(self):
+        """The camera reached the destination — naturally, or because a skip
+        just cut the pan short. Freeze here; leaving needs its own,
+        subsequent Enter (see handle_key)."""
+        self._landed = True
 
-    def _finish(self):
+    def handle_key(self, key: int) -> bool:
+        K = Qt.Key
+        if key in (K.Key_Return, K.Key_Enter, K.Key_Space, K.Key_Escape, K.Key_Backspace):
+            self._advance()
+        return True
+
+    def _advance(self):
+        """Enter pressed. Mid-flight: land immediately (cut the pan short)
+        and wait there. Already landed: actually leave the page — back to the
+        Season Hub."""
         if not self._active:
             return
+        if not self._landed:
+            self._map.fly_skip(self._to_country, on_done=self._on_landed)
+            return
         self._active = False
-        self.finished.emit()
-
-
-class _HubVbg:
-    """SeasonHubPage._vbg router: the wizard's shared GapFiller strip below the
-    page normally continues the hub's career.jpg photo — except while the
-    full-bleed map transition is showing, where continuing a photo underneath
-    a live map read as a stray band of unrelated art. There it just extends
-    the map's own dark fill instead, so the transition reads as one
-    continuous screen."""
-
-    def __init__(self, page):
-        self._page = page
-        self._static = _StaticBackground(_HUB_BG)
-
-    def paint(self, painter, widget, full_size=None, offset=None):
-        if self._page._stack.currentWidget() is self._page._gp_map:
-            painter.fillRect(widget.rect(), QColor('#08080e'))
-        else:
-            self._static.paint(painter, widget, full_size=full_size, offset=offset)
+        # This round boundary's recap has now been seen — don't show it again
+        # when the hub reloads right after (see SeasonHubPage._refresh_data).
+        self._wiz.gp_recap_dismissed_for = self._wiz.circuit_index
+        # The hub sits one page BEHIND this one in wizard history (it navigated
+        # here via next()), so return the same way every session page does —
+        # walk history back with return_to_hub(), NOT next(). QWizard.next()
+        # only ever moves forward to nextId(); it can't step back onto an
+        # already-visited page, so using it here left Enter doing nothing.
+        self._wiz.return_to_hub()
 
 
 # ── Page ──────────────────────────────────────────────────────────────────────
@@ -2784,8 +2804,11 @@ class SeasonHubPage(QWizardPage):
         self._hub_focus = 0
         # Between-GP recap state (set by _refresh_data): True while the hub is
         # showing the post-Finish "TO NEXT GRAND PRIX" landing, plus the
-        # (from_country, to_country) the map transition flies between when
-        # "To next grand prix" is pressed — see _go_next.
+        # (from_country, to_country) GpMapPage flies between when "To next
+        # grand prix" is pressed — see _go_next/nextId(). (Whether the recap
+        # has already been dismissed for the current round boundary lives on
+        # the wizard — wiz.gp_recap_dismissed_for, set by GpMapPage — since
+        # that page, not this one, is what marks it seen.)
         self._showing_next_gp = False
         self._next_gp_info = None
 
@@ -2830,18 +2853,12 @@ class SeasonHubPage(QWizardPage):
         self._season_stats_screen = _SeasonStatsScreen()
         self._stack.addWidget(self._wrap(self._season_stats_screen))  # 4
 
-        self._gp_map = _GpMapTransition()                        # 5
-        self._gp_map.finished.connect(self._after_gp_map)
-        self._stack.addWidget(self._gp_map)
-
         # Only the intro plays video; once it's done the hub/profile/calendar
         # sit over this static image instead of the shared ambient loop. Named
         # _vbg (matching every video-backed page) so the wizard's _GapFiller
         # picks it up automatically and continues it into the reserved strip
-        # below the page instead of leaving that strip plain black — except
-        # while the map transition is showing, where a flat fill matching its
-        # own background continues it instead of the hub photo (see _HubVbg).
-        self._vbg = _HubVbg(self)
+        # below the page instead of leaving that strip plain black.
+        self._vbg = _StaticBackground(_HUB_BG)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -2974,8 +2991,14 @@ class SeasonHubPage(QWizardPage):
         # the NEXT GP (see below). Derived from persistent state, not a one-shot
         # flag, so it survives quitting and CONTINUE-ing while on the recap (the
         # round-granular save resumes exactly at this boundary anyway). Round 1
-        # (circuit_index 0) stays the normal "TO NEXT SESSION" hub.
-        show_next_gp = wiz.session_index == 0 and wiz.circuit_index > 0
+        # (circuit_index 0) stays the normal "TO NEXT SESSION" hub — and so does
+        # landing back here after the map transition (GpMapPage) has already
+        # been watched and dismissed for this same boundary
+        # (wiz.gp_recap_dismissed_for) — otherwise the still-persistent
+        # session_index/circuit_index state would show the recap again right
+        # after leaving it.
+        show_next_gp = (wiz.session_index == 0 and wiz.circuit_index > 0
+                        and wiz.gp_recap_dismissed_for != wiz.circuit_index)
         self._hub.cards()[0].set_text('TO NEXT GRAND PRIX' if show_next_gp else 'TO NEXT SESSION')
 
         # circuit_index always points at the round about to be played next
@@ -2989,17 +3012,18 @@ class SeasonHubPage(QWizardPage):
         display_row = _season_row(wiz.circuit_index - 1) if show_next_gp else play_row
         next_gp_row = play_row if show_next_gp else None    # middle preview of what's next
 
-        # Arm the map transition for "To next grand prix" (see _go_next) when
-        # this is the between-GP landing — flies from the just-finished GP's
-        # country to the next one's. Kicked off as a background preload right
-        # away (not just when the button is pressed) so the transition's
-        # expensive capture is normally already done by the time the player
-        # actually presses it — see WorldMapWidget.preload_fly.
+        # Arm the map transition for "To next grand prix" (see _go_next/
+        # nextId()) when this is the between-GP landing — flies from the
+        # just-finished GP's country to the next one's. Kicked off as a
+        # background preload right away (not just when the button is
+        # pressed) so the transition's expensive capture is normally already
+        # done by the time the player actually presses it — see
+        # WorldMapWidget.preload_fly.
         self._showing_next_gp = show_next_gp
         if show_next_gp and display_row is not None and next_gp_row is not None:
             from_country, to_country = str(display_row['country']), str(next_gp_row['country'])
             self._next_gp_info = (from_country, to_country)
-            self._gp_map.preload(from_country, to_country)
+            wiz.page(wiz.ID_GP_MAP).preload(from_country, to_country)
         else:
             self._next_gp_info = None
 
@@ -3073,38 +3097,71 @@ class SeasonHubPage(QWizardPage):
         # resume_at_hub() (mid-weekend re-entry) deliberately leaves
         # session_index alone so the round continues where it paused.
         self._wiz.session_index = 0
-        self._refresh_data()
         self._hub_focus = 0
-        self._sync_hub_focus()
         if self._wiz.circuit_index == 0:
-            # Start of a season, before Round 1 — play the intro clip.
+            # Start of a season, before Round 1: the intro clip plays first,
+            # giving _refresh_data() (and the geometry-dependent layout work
+            # it triggers — see resume_at_hub()) several seconds to settle
+            # before the dashboard is ever actually shown, so populating it
+            # while still hidden is safe here.
+            self._refresh_data()
+            self._sync_hub_focus()
             self._stack.setCurrentIndex(0)
             self._wiz.pause_music()     # the intro clip has its own audio
             self._intro.start()
         else:
             # CONTINUE'ing mid-season (before Round 2+): the intro is a
-            # new-season beat, so skip it and drop straight onto the dashboard,
-            # the same landing resume_at_hub()/_show_hub() use.
-            self._wiz.resume_music()
+            # new-season beat, so skip it and drop straight onto the
+            # dashboard — same landing as resume_at_hub(), same reason to
+            # show first and populate after (see there).
             self._stack.setCurrentIndex(1)
+            self._wiz.resume_music()
+            self._refresh_data()
+            self._sync_hub_focus()
         self.setFocus()     # keep focus off the video widget so Esc/Enter both reach handle_key
 
     def resume_at_hub(self):
-        """Reopen straight on the dashboard, skipping the intro clip —
-        used when a race session bails back to the hub mid-season (Esc
-        after a round) instead of arriving here fresh via Calendar."""
+        """Reopen straight on the dashboard, skipping the intro clip — used
+        when a race session bails back to the hub mid-season (Esc after a
+        round, or the between-GP map transition being dismissed) instead of
+        arriving here fresh via Calendar.
+
+        Ends by hide()+show()-ing the dashboard scroll area. This is the
+        between-GP ghosting fix. Returning from the map (a separate
+        QWizardPage), the hub's OWN internal QStackedWidget never left the
+        dashboard page — it showed the recap the entire time the map was up —
+        so the setCurrentIndex(1) below is a no-op: no hide/show, so no clean
+        re-render, and _refresh_data() just mutates the (translucent) panels
+        in place over their earlier paint, leaving it ghosted. Tabbing out to
+        Profile/Calendar and back visibly clears it precisely because THAT
+        does hide+show the dashboard page. So we do the same hide+show
+        ourselves — deferred a tick so the layout (_sync_upcoming_height &c.)
+        has settled first — forcing the same full clean repaint of the
+        dashboard's whole region that a real tab switch gives."""
+        self._stack.setCurrentIndex(1)
         self._refresh_data()
         self._hub_focus = 0
         self._sync_hub_focus()
-        self._stack.setCurrentIndex(1)
         self._wiz.resume_music()
         self.setFocus()
+        QTimer.singleShot(0, self._flush_dashboard)
+
+    def _flush_dashboard(self):
+        """Hide+show the dashboard to force a clean full repaint of its
+        region — see resume_at_hub()."""
+        self._dash_scroll.hide()
+        self._dash_scroll.show()
+        self._dash_scroll.repaint()
 
     def nextId(self):
+        # Between-GP landing: "To Next Grand Prix" goes to the map transition
+        # first (GpMapPage), which hands back here once dismissed. Otherwise
         # "To Next Session" navigates to the page owning the upcoming session:
         # Practice(0) -> ID_PRACTICE, Qualifying 1/2 -> ID_QUALI, Race 1/2 ->
         # ID_RACE. The pages themselves run only the session at session_index
         # and hand back to the hub afterwards (see return_to_hub_after_session).
+        if self._showing_next_gp:
+            return self._wiz.ID_GP_MAP
         idx = self._wiz.session_index
         if idx <= 0:
             return self._wiz.ID_PRACTICE
@@ -3161,11 +3218,6 @@ class SeasonHubPage(QWizardPage):
                 self._stack.setCurrentIndex(1)
             return True
 
-        if idx == 5:                                       # GP map transition — any key skips
-            if key in (K.Key_Return, K.Key_Enter, K.Key_Space, K.Key_Escape, K.Key_Backspace):
-                self._gp_map.skip()
-            return True
-
         return True
 
     def _open_profile(self):
@@ -3180,21 +3232,9 @@ class SeasonHubPage(QWizardPage):
         self._stack.setCurrentIndex(4)
 
     def _go_next(self):
-        # On the between-GP recap landing, "To next grand prix" flies the map
-        # from the just-finished GP's country to the next one's before
-        # entering its Practice — rather than cutting straight into it.
-        if self._showing_next_gp and self._next_gp_info is not None:
-            from_country, to_country = self._next_gp_info
-            self._gp_map.load(from_country, to_country)
-            self._stack.setCurrentIndex(5)
-            self._gp_map.start()
-        else:
-            self._wiz.next()
-
-    def _after_gp_map(self):
-        # Map transition done (or skipped) — head into the next round's
-        # first session.
-        self._showing_next_gp = False
+        # nextId() routes to GpMapPage on the between-GP landing, or straight
+        # to the upcoming session's page otherwise — either way this is just
+        # the normal wizard page transition.
         self._wiz.next()
 
     def _confirm_main_menu(self):

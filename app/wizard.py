@@ -100,6 +100,15 @@ class MotoWizard(QWizard):
         # until the first hub visit (and always None outside career mode).
         self.weekend_weather = None
 
+        # Career only: circuit_index the between-GP map transition (GpMapPage)
+        # was last completed for — set right before it hands back to the
+        # Season Hub. Suppresses that boundary's recap from reappearing when
+        # the hub reloads immediately after (its session_index/circuit_index
+        # would otherwise still read as "between grand prix"); a different
+        # circuit_index (the next round boundary) re-arms it. See
+        # SeasonHubPage._refresh_data / GpMapPage.
+        self.gp_recap_dismissed_for = None
+
         # Which of the CAREER_SLOTS (0-9) the current Career session reads/
         # writes — set by CareerPage before any save/history/rider call.
         self.career_slot = None
@@ -156,7 +165,7 @@ class MotoWizard(QWizard):
         report(0.12, 'Loading modules')
         from app.pages.p_home          import HomePage
         from app.pages.p_calendar      import CalendarPage      # pulls in the map stack
-        from app.pages.p_season_hub    import SeasonHubPage
+        from app.pages.p_season_hub    import SeasonHubPage, GpMapPage
         from app.pages.p0_circuit      import CircuitPage
         from app.pages.p1_practice     import PracticePage
         from app.pages.p2_qualifying   import QualifyingPage
@@ -172,6 +181,7 @@ class MotoWizard(QWizard):
             ('ID_HOME',       'Home',         lambda: HomePage(self)),
             ('ID_CALENDAR',   'Season setup', lambda: CalendarPage(self)),
             ('ID_SEASON_HUB', 'Season hub',   lambda: SeasonHubPage(self)),
+            ('ID_GP_MAP',     'GP transition', lambda: GpMapPage(self)),
             ('ID_CIRCUIT',    'Circuits',     lambda: CircuitPage(self)),
             ('ID_PRACTICE',   'Practice',     lambda: PracticePage(self)),
             ('ID_QUALI',      'Qualifying',   lambda: QualifyingPage(self)),

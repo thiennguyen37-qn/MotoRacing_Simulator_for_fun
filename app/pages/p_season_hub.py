@@ -1440,6 +1440,16 @@ def _fmt_record(rec: tuple | None) -> str:
     return f'{fmt_lap(sec)} — {str(name).upper()} — {year}'
 
 
+# Shared flag box for the two GP-header cards (GP Info's _NextRacePanel and
+# the between-GP _UpcomingSessionPanel preview): a fixed WIDTH×HEIGHT so every
+# country's flag occupies the exact same rectangle. Without a fixed width,
+# flags scale to height only and wide flags (e.g. Qatar, ~2.5:1) come out far
+# longer than a 3:2 one (France) at the same height. 96×64 is 3:2, so a
+# standard 3:2 flag is undistorted and unusually-wide ones are reined in to
+# match rather than overhanging the card.
+_GP_FLAG_W, _GP_FLAG_H = 96, 64
+
+
 class _NextRacePanel(QWidget):
     """Top-left card: the upcoming round's title and national flag, a
     second divider (border2), then the circuit's vitals and its two
@@ -1447,7 +1457,7 @@ class _NextRacePanel(QWidget):
     other dashboard panel uses (via _panel_title), just with a flag and a
     stat block standing in for a row list."""
 
-    _FLAG_H = 64
+    _FLAG_H = _GP_FLAG_H
 
     def __init__(self):
         super().__init__()
@@ -1512,7 +1522,7 @@ class _NextRacePanel(QWidget):
         title = f'GRAND PRIX OF {country.upper()}' if country else 'OFF-SEASON'
         self._title_lay.addWidget(_panel_title(title))
 
-        pix = _flag_pixmap(country, height=self._FLAG_H) if country else None
+        pix = _flag_pixmap(country, height=_GP_FLAG_H, width=_GP_FLAG_W) if country else None
         self._flag_lbl.setPixmap(pix if pix is not None else QPixmap())
 
         if circuit_row is not None:
@@ -1729,7 +1739,7 @@ class _UpcomingSessionPanel(QWidget):
         — the NEXT round's flag and "GRAND PRIX OF <country>" instead, with no
         second divider and no weather. Toggled by load()'s next_gp_country."""
 
-    _FLAG_H = 60
+    _FLAG_H = _GP_FLAG_H
 
     def __init__(self):
         super().__init__()
@@ -1799,7 +1809,7 @@ class _UpcomingSessionPanel(QWidget):
              next_gp_country: str | None = None):
         if next_gp_country:
             country = str(next_gp_country)
-            pix = _flag_pixmap(country, height=self._FLAG_H) if country else None
+            pix = _flag_pixmap(country, height=_GP_FLAG_H, width=_GP_FLAG_W) if country else None
             self._flag_lbl.setPixmap(pix if pix is not None else QPixmap())
             self._gp_name_lbl.setText(f'GRAND PRIX OF {country.upper()}')
             self._session_box.setVisible(False)

@@ -451,7 +451,11 @@ class _ResultsView(QWidget):
         super().__init__()
         self.setStyleSheet('background: transparent;')
         self._lay = QVBoxLayout(self)
-        self._lay.setContentsMargins(48, 44, 48, 40)
+        # Left/right margins trimmed down (paired with a tighter _TintWrap
+        # inset for this view specifically — see _ProfileScreen) so the
+        # race-by-race grid gets as much width as possible before its own
+        # horizontal scrollbar kicks in, without sitting flush on the screen edge.
+        self._lay.setContentsMargins(12, 44, 12, 40)
         self._lay.setSpacing(0)
 
         title = QLabel('CAREER RESULTS')
@@ -680,16 +684,22 @@ class _ProfileScreen(QWidget):
         # Only Results can outgrow the panel (a long career's race-by-race
         # grid) — Basic Info and Rating are fixed, bounded content and don't
         # need a scrollbar, so they skip the QScrollArea wrapper entirely.
+        # Results also gets a tighter tint inset (16 vs. the usual 48) — its
+        # race-by-race grid is the one view that's actually width-constrained
+        # (R1…Rn columns), so it gets the extra room; Basic Info/Rating keep
+        # the wider inset since their own layouts are already tuned to it.
         self._scrolls: list = []
-        for view, needs_scroll in ((self._basic, False), (self._results, True), (self._rating, False)):
+        for view, needs_scroll, inset in ((self._basic, False, _TINT_MARGIN),
+                                          (self._results, True, 16),
+                                          (self._rating, False, _TINT_MARGIN)):
             if needs_scroll:
                 sc = _make_scroll_area()
                 sc.setWidget(view)
                 self._scrolls.append(sc)
-                self._content.addWidget(_TintWrap(sc, full_bleed=True))   # 1/2/3
+                self._content.addWidget(_TintWrap(sc, margin=inset, full_bleed=True))   # 1/2/3
             else:
                 self._scrolls.append(None)
-                self._content.addWidget(_TintWrap(view, full_bleed=True))
+                self._content.addWidget(_TintWrap(view, margin=inset, full_bleed=True))
 
         outer.addWidget(self._content, 1)
 

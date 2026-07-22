@@ -130,8 +130,8 @@ def _aggregate_riders(seasons: list) -> dict:
                 a['team']         = team          # most recent
                 a['manufacturer'] = manu
             else:
-                pos, pts = None, 0
-            a['history'].append({'year': year, 'pos': pos, 'points': pts,
+                pos, pts, manu = None, 0, ''
+            a['history'].append({'year': year, 'pos': pos, 'points': pts, 'manufacturer': manu,
                                  'rounds_detail': s.get('rounds_detail'), **per})
         champ = s.get('champion') or {}
         if champ.get('name') in agg:
@@ -891,30 +891,33 @@ def _build_rider_race_matrix(rec: dict):
         return None
 
     max_races = max((len(results) for _, results in per_season if results is not None), default=0)
-    pts_col = 1 + max_races
+    race0   = 2                  # YEAR, BIKE, then R1…Rn
+    pts_col = race0 + max_races
     pos_col = pts_col + 1
-    headers = ['YEAR'] + [f'R{i + 1}' for i in range(max_races)] + ['PTS', 'POSITION']
+    headers = ['YEAR', 'BIKE'] + [f'R{i + 1}' for i in range(max_races)] + ['PTS', 'POSITION']
     t = make_table(headers)
     t.setRowCount(len(per_season))
     neutral = row_bg(_DEFAULT_COLOR)
 
     for i, (h, results) in enumerate(per_season):
         t.setItem(i, 0, _cell(h['year'], neutral, _CELL_W, bold=True, center=True, size=11))
+        t.setItem(i, 1, _cell(h.get('manufacturer') or '—', neutral, _CELL_W, center=True, size=10))
         for c in range(max_races):
             r = results[c] if (results is not None and c < len(results)) else None
             if r is None:
-                t.setItem(i, 1 + c, _grid_cell('', neutral))
+                t.setItem(i, race0 + c, _grid_cell('', neutral))
             else:
                 txt = 'Ret' if r['dnf'] else str(r['pos'])
-                t.setItem(i, 1 + c, _grid_cell(txt, _pos_bg(r['pos'], r['dnf'])))
+                t.setItem(i, race0 + c, _grid_cell(txt, _pos_bg(r['pos'], r['dnf'])))
         t.setItem(i, pts_col, _cell(h.get('points', 0), neutral, _CELL_W, bold=True, center=True, size=11))
         pos = h.get('pos')
         pos_bg = _SEASON_MEDAL_BG.get(pos, neutral)
         t.setItem(i, pos_col, _cell(_ordinal(pos) if pos else '—', pos_bg, _CELL_W, bold=True, center=True, size=11))
 
     t.setColumnWidth(0, 70)
+    t.setColumnWidth(1, 150)
     for c in range(max_races):
-        t.setColumnWidth(1 + c, 54)
+        t.setColumnWidth(race0 + c, 54)
     t.setColumnWidth(pts_col, 70)
     t.setColumnWidth(pos_col, 80)
     t.horizontalHeader().setStretchLastSection(False)
@@ -925,6 +928,16 @@ def _build_rider_race_matrix(rec: dict):
         hdr = t.horizontalHeaderItem(c)
         if hdr is not None:
             hdr.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    # A handful of seasons should just show in full, no vertical scrollbar of
+    # its own — the table's generic sizeHint() undershoots its actual content
+    # height (it doesn't account for the real row/header sizes), which is
+    # what was clipping the last row. Fixing the height to header + all rows
+    # fits everything; the page's own scroll area is what should take over
+    # once there's genuinely too much content for the screen, not this table.
+    t.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    t.setFixedHeight(t.horizontalHeader().sizeHint().height() + t.verticalHeader().length()
+                     + 2 * t.frameWidth())
     return t
 
 

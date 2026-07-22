@@ -235,9 +235,8 @@ class _TabButton(QFrame):
 
 
 class _TopTabBar(QWidget):
-    """A flat row of _TabButtons — reused for the main hub (To Next Session /
-    Your Profile / Calendar / Season Stats / Main Menu) and for the Your
-    Profile sub-hub (Basic Info / Results / Rating)."""
+    """A flat row of _TabButtons — the main hub's own tab bar (To Next
+    Session / Your Profile / Season Info / Main Menu)."""
 
     def __init__(self, labels: list):
         super().__init__()
@@ -260,8 +259,8 @@ class _TopTabBar(QWidget):
 
 class _SideTabBar(QWidget):
     """A vertical stack of short tab bars, pinned to the top-left — the Your
-    Profile sub-hub's browse menu. Up/Down moves the focus (contrast
-    _TopTabBar's full-width horizontal row driven by Left/Right)."""
+    Profile and Season Info sub-hubs' browse menu. Up/Down moves the focus
+    (contrast _TopTabBar's full-width horizontal row driven by Left/Right)."""
 
     _BAR_W = 280
 
@@ -922,20 +921,6 @@ def _track_records(seasons_for_rec: list, circuit_name: str | None) -> tuple:
             if session is not None and (blc is None or session[0] < blc[0]):
                 blc = (session[0], session[1], year)
     return brlc, blc
-
-
-def _rider_position_trend(rounds_detail_list: list, name: str) -> list:
-    """(label, position-or-None) per race in calendar order for the line
-    chart — None marks a DNF (no finishing position to plot)."""
-    flat = _flatten_rounds(rounds_detail_list)
-    out = []
-    for i, (_country, race) in enumerate(flat, start=1):
-        r = next((x for x in race if x['name'] == name), None)
-        if r is None:
-            continue
-        pos = None if r.get('dnf') else int(r.get('pos', 0))
-        out.append((f'R{i}', pos))
-    return out
 
 
 class _FormBox(QFrame):
@@ -2615,9 +2600,9 @@ class _HubDashboard(QWidget):
         QTimer.singleShot(0, self._sync_upcoming_height)
 
 
-# ── Season Stats tab: STANDINGS / YOUR RESULT (same sub-hub pattern as
-# Your Profile) — unlike the dashboard's condensed Standings panel (5 rows
-# around the player), the full-page Standings view here lists every rider.
+# ── Season Info tab: STANDINGS / CALENDAR (same sub-hub pattern as Your
+# Profile) — unlike the dashboard's condensed Standings panel (5 rows around
+# the player), the full-page Standings view here lists every rider.
 
 class _FullStandingsView(QWidget):
     def __init__(self):
@@ -2674,148 +2659,12 @@ class _FullStandingsView(QWidget):
             self._rows_lay.insertWidget(self._rows_lay.count() - 1, ph)
 
 
-class _PositionTrendChart(QWidget):
-    """Line plot of the rider's finishing position race by race this season
-    — x = race, y = position (inverted, P1 at the top, since a higher chart
-    line should read as a better result). DNFs break the line and get a
-    marker at the bottom row instead of implying a real finishing spot."""
+class _SeasonInfoScreen(QWidget):
+    """Same focus-then-open sub-hub as Your Profile: a vertical stack of tab
+    bars pinned top-left (STANDINGS / CALENDAR), Enter opens the selection
+    full-screen behind a dark tint, Escape closes it back to the tab stack."""
 
-    _DNF_COLOR = QColor('#8a4fc9')
-    _LINE_COLOR = QColor('#e02840')
-
-    def __init__(self):
-        super().__init__()
-        self.setMinimumHeight(220)
-        self.setStyleSheet('background: transparent;')
-        self._points: list = []
-
-    def load(self, points: list):
-        self._points = points
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        pad_l, pad_r, pad_t, pad_b = 34, 12, 10, 24
-
-        if not self._points:
-            p.setFont(QFont('Segoe UI', 11))
-            p.setPen(QColor('#8a8aa2'))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                      'No races run yet this season.')
-            return
-
-        n = len(self._points)
-        max_pos = max((pos for _, pos in self._points if pos is not None), default=20)
-        max_pos = max(max_pos, 3)
-        plot_w = max(1, w - pad_l - pad_r)
-        plot_h = max(1, h - pad_t - pad_b)
-
-        def _x(i):
-            return pad_l + (i / (n - 1) * plot_w if n > 1 else plot_w / 2)
-
-        def _y(pos):
-            return pad_t + (pos - 1) / max(1, max_pos - 1) * plot_h
-
-        p.setPen(QPen(QColor(255, 255, 255, 50), 1))
-        p.drawLine(int(pad_l), int(pad_t), int(pad_l), int(h - pad_b))
-        p.drawLine(int(pad_l), int(h - pad_b), int(w - pad_r), int(h - pad_b))
-
-        p.setFont(QFont('Segoe UI', 8))
-        step = max(1, max_pos // 5)
-        for pos in range(1, max_pos + 1, step):
-            y = _y(pos)
-            p.setPen(QColor(255, 255, 255, 22))
-            p.drawLine(int(pad_l), int(y), int(w - pad_r), int(y))
-            p.setPen(QColor('#8a8aa2'))
-            p.drawText(QRect(0, int(y) - 7, pad_l - 6, 14),
-                      Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f'P{pos}')
-
-        prev = None
-        for i, (_label, pos) in enumerate(self._points):
-            if pos is None:
-                prev = None
-                continue
-            pt = (_x(i), _y(pos))
-            if prev is not None:
-                p.setPen(QPen(self._LINE_COLOR, 2))
-                p.drawLine(int(prev[0]), int(prev[1]), int(pt[0]), int(pt[1]))
-            prev = pt
-
-        p.setPen(Qt.PenStyle.NoPen)
-        for i, (_label, pos) in enumerate(self._points):
-            if pos is None:
-                p.setBrush(self._DNF_COLOR)
-                p.drawEllipse(QPointF(_x(i), h - pad_b), 4, 4)
-            else:
-                p.setBrush(self._LINE_COLOR)
-                p.drawEllipse(QPointF(_x(i), _y(pos)), 4, 4)
-
-
-class _YourResultView(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setStyleSheet('background: transparent;')
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(56, 52, 56, 48)
-        outer.setSpacing(0)
-
-        title = QLabel('YOUR RESULT')
-        title.setFont(QFont('Segoe UI', 26, QFont.Weight.Bold))
-        title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
-        outer.addWidget(title)
-        outer.addSpacing(30)
-
-        self._result_holder = QWidget()
-        self._result_holder.setStyleSheet('background: transparent;')
-        self._result_lay = QVBoxLayout(self._result_holder)
-        self._result_lay.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(self._result_holder)
-        outer.addSpacing(36)
-
-        chart_title = QLabel('POSITION BY RACE')
-        chart_title.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
-        chart_title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
-        outer.addWidget(chart_title)
-        outer.addSpacing(14)
-
-        self._chart = _PositionTrendChart()
-        outer.addWidget(self._chart)
-        outer.addStretch(1)
-
-    def load(self, standings: list, rider_name: str, honours: dict | None,
-            trend: list | None = None):
-        while self._result_lay.count():
-            item = self._result_lay.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.setParent(None)
-        pos = next((i for i, s in enumerate(standings, start=1)
-                   if s.get('name') == rider_name), None)
-        points = next((int(s.get('points', 0)) for s in standings
-                       if s.get('name') == rider_name), 0)
-        honours = honours or {}
-
-        def _count(key):
-            return next((c for n, c in honours.get(key, []) if n == rider_name), 0)
-
-        pairs = [
-            ('POSITION', f'P{pos}' if pos else '—'),
-            ('POINTS', points),
-            ('WINS', _count('wins')),
-            ('PODIUMS', _count('podiums')),
-            ('POLES', _count('poles')),
-        ]
-        self._result_lay.addWidget(_stat_tiles(pairs))
-        self._chart.load(trend or [])
-
-
-class _SeasonStatsScreen(QWidget):
-    """Same focus-then-open interaction as Your Profile: STANDINGS / YOUR
-    RESULT, each behind its own tint once opened."""
-
-    SUB_TABS = ['STANDINGS', 'YOUR RESULT']
+    SUB_TABS = ['STANDINGS', 'CALENDAR']
 
     def __init__(self):
         super().__init__()
@@ -2824,34 +2673,54 @@ class _SeasonStatsScreen(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        self._tabbar = _TopTabBar(self.SUB_TABS)
-        outer.addWidget(self._tabbar)
-
         self._standings_view = _FullStandingsView()
-        self._result_view = _YourResultView()
+        self._calendar_view = _CalendarView()
 
         self._content = QStackedWidget()
         self._content.setStyleSheet('background: transparent;')
-        blank = QWidget()
-        blank.setStyleSheet('background: transparent;')
-        self._content.addWidget(blank)                             # 0 nothing opened
+        self._sidebar = _SideTabBar(self.SUB_TABS)
+        browse_page = QWidget()
+        browse_page.setStyleSheet('background: transparent;')
+        bp_lay = QVBoxLayout(browse_page)
+        bp_lay.setContentsMargins(48, 40, 48, 40)
+        bp_lay.setSpacing(0)
+        bp_lay.addWidget(self._sidebar, 0,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        bp_lay.addStretch(1)
+        self._content.addWidget(browse_page)                       # 0 nothing opened
 
-        self._scrolls = []
-        for view in (self._standings_view, self._result_view):
-            sc = _make_scroll_area()
-            sc.setWidget(view)
-            self._scrolls.append(sc)
-            self._content.addWidget(_TintWrap(sc))                 # 1/2
+        # Standings can outgrow the panel (a big grid) so it gets wrapped in
+        # its own outer scroll area; Calendar already scrolls its slot list
+        # internally (see _CalendarView), so it's tinted directly instead —
+        # same split Your Profile makes between Results and Basic Info/Rating.
+        self._scrolls: list = []
+        for view, needs_scroll in ((self._standings_view, True),
+                                   (self._calendar_view, False)):
+            if needs_scroll:
+                sc = _make_scroll_area()
+                sc.setWidget(view)
+                self._scrolls.append(sc)
+                self._content.addWidget(_TintWrap(sc, full_bleed=True))   # 1
+            else:
+                self._scrolls.append(None)
+                self._content.addWidget(_TintWrap(view, full_bleed=True))  # 2
 
         outer.addWidget(self._content, 1)
 
         self._focus = 0
         self._opened = False
 
-    def load(self, standings: list, rider_name: str, honours: dict | None,
-            trend: list | None = None):
+    def is_opened(self) -> bool:
+        """True while a sub-view is showing full-bleed (not the tab bar) — the
+        hub uses this to tint the reserved bottom strip to match."""
+        return self._opened
+
+    def load(self, standings: list, rider_name: str, season_df):
         self._standings_view.load(standings, rider_name)
-        self._result_view.load(standings, rider_name, honours, trend)
+        self._calendar_view.load(season_df)
+        bar = self._calendar_view.scrollbar()
+        if bar is not None:
+            bar.setValue(0)
 
     def reset(self):
         """Always resume on the tab bar, nothing opened."""
@@ -2860,20 +2729,24 @@ class _SeasonStatsScreen(QWidget):
         self._sync_focus()
         self._content.setCurrentIndex(0)
         for sc in self._scrolls:
-            bar = sc.verticalScrollBar()
-            if bar is not None:
-                bar.setValue(0)
+            if sc is not None:
+                bar = sc.verticalScrollBar()
+                if bar is not None:
+                    bar.setValue(0)
+        bar = self._calendar_view.scrollbar()
+        if bar is not None:
+            bar.setValue(0)
 
     def _sync_focus(self):
-        for i, c in enumerate(self._tabbar.cards()):
+        for i, c in enumerate(self._sidebar.cards()):
             c.set_focused(i == self._focus)
 
     def handle_key(self, key: int):
         """Returns 'close' when the caller should return to the main hub."""
         K = Qt.Key
         if not self._opened:
-            if key in (K.Key_Left, K.Key_Right):
-                self._focus = (self._focus + (1 if key == K.Key_Right else -1)) % 2
+            if key in (K.Key_Up, K.Key_Down):     # vertical stack of tab bars
+                self._focus = (self._focus + (1 if key == K.Key_Down else -1)) % 2
                 self._sync_focus()
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
                 self._opened = True
@@ -2886,9 +2759,14 @@ class _SeasonStatsScreen(QWidget):
             self._opened = False
             self._content.setCurrentIndex(0)
         elif key in (K.Key_Up, K.Key_Down):
-            bar = self._scrolls[self._focus].verticalScrollBar()
-            if bar is not None:
-                bar.setValue(bar.value() + (-60 if key == K.Key_Up else 60))
+            dy = -60 if key == K.Key_Up else 60
+            sc = self._scrolls[self._focus]
+            if sc is not None:
+                bar = sc.verticalScrollBar()
+                if bar is not None:
+                    bar.setValue(bar.value() + dy)
+            else:
+                self._calendar_view.scroll(dy)
         return None
 
 
@@ -3014,7 +2892,7 @@ class SeasonHubPage(QWizardPage):
         self._intro.finished.connect(self._show_hub)
         self._stack.addWidget(self._intro)                      # 0
 
-        self._hub = _TopTabBar(['TO NEXT SESSION', 'YOUR PROFILE', 'CALENDAR', 'SEASON STATS', 'MAIN MENU'])
+        self._hub = _TopTabBar(['TO NEXT SESSION', 'YOUR PROFILE', 'SEASON INFO', 'MAIN MENU'])
         self._hub_dashboard = _HubDashboard()
         hub_page = QWidget()
         hub_page.setStyleSheet('background: transparent;')
@@ -3041,15 +2919,12 @@ class SeasonHubPage(QWizardPage):
         self._profile = _ProfileScreen()
         self._stack.addWidget(self._wrap(self._profile))         # 2
 
-        self._calendar = _CalendarView()
-        self._stack.addWidget(self._wrap(self._calendar))        # 3
+        self._season_info = _SeasonInfoScreen()
+        self._stack.addWidget(self._wrap(self._season_info))     # 3
 
-        self._season_stats_screen = _SeasonStatsScreen()
-        self._stack.addWidget(self._wrap(self._season_stats_screen))  # 4
-
-        # Only the intro plays video; once it's done the hub/profile/calendar
-        # sit over this static image instead of the shared ambient loop. Named
-        # _vbg (matching every video-backed page) so the wizard's _GapFiller
+        # Only the intro plays video; once it's done the hub/profile/season
+        # info sit over this static image instead of the shared ambient loop.
+        # Named _vbg (matching every video-backed page) so the wizard's _GapFiller
         # picks it up automatically and continues it into the reserved strip
         # below the page instead of leaving that strip plain black.
         self._vbg = _StaticBackground(_HUB_BG)
@@ -3269,7 +3144,6 @@ class SeasonHubPage(QWizardPage):
         track_winners, track_polesitters = _track_history(seasons_for_rec, display_circuit_name)
         brlc, blc = _track_records(seasons_for_rec, display_circuit_name)
 
-        trend = _rider_position_trend(current_rounds_detail or [], name or '')
         upcoming = SESSION_NAMES[wiz.session_index % len(SESSION_NAMES)]
 
         # Weather is always for the round you'll play next (play_row) so the
@@ -3344,12 +3218,7 @@ class SeasonHubPage(QWizardPage):
                                  gp_result=gp_result,
                                  result_title=result_title,
                                  champion=champion)
-        self._season_stats_screen.load(standings, name or '', honours, trend)
-
-        self._calendar.load(self._wiz.season_df)
-        bar = self._calendar.scrollbar()
-        if bar is not None:
-            bar.setValue(0)
+        self._season_info.load(standings, name or '', self._wiz.season_df)
 
     def initializePage(self):
         # Fresh arrival from Calendar: begin the weekend at the first session.
@@ -3453,11 +3322,11 @@ class SeasonHubPage(QWizardPage):
 
         if idx == 1:                                     # hub — Esc disabled, use the Main Menu tab
             if key in (K.Key_Left, K.Key_Right):
-                self._hub_focus = (self._hub_focus + (1 if key == K.Key_Right else -1)) % 5
+                self._hub_focus = (self._hub_focus + (1 if key == K.Key_Right else -1)) % 4
                 self._sync_hub_focus()
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
-                (self._go_next, self._open_profile, self._open_calendar,
-                 self._open_season_stats_screen, self._confirm_main_menu)[self._hub_focus]()
+                (self._go_next, self._open_profile,
+                 self._open_season_info, self._confirm_main_menu)[self._hub_focus]()
             return True
 
         if idx == 2:                                      # Your Profile owns its own sub-nav
@@ -3472,15 +3341,12 @@ class SeasonHubPage(QWizardPage):
                 self._stack.setCurrentIndex(1)
             return True
 
-        if idx == 3:                                       # calendar detail
-            if key in (K.Key_Escape, K.Key_Backspace):
-                self._stack.setCurrentIndex(1)
-            elif key in (K.Key_Up, K.Key_Down):
-                self._calendar.scroll(-60 if key == K.Key_Up else 60)
-            return True
-
-        if idx == 4:                                       # Season Stats owns its own sub-nav
-            if self._season_stats_screen.handle_key(key) == 'close':
+        if idx == 3:                                       # Season Info owns its own sub-nav
+            result = self._season_info.handle_key(key)
+            gap = getattr(self._wiz, '_gap_filler', None)
+            if gap is not None:
+                gap.update()
+            if result == 'close':
                 self._stack.setCurrentIndex(1)
             return True
 
@@ -3490,12 +3356,9 @@ class SeasonHubPage(QWizardPage):
         self._profile.reset()      # always land on the tab bar, not the last-viewed sub-tab
         self._stack.setCurrentIndex(2)
 
-    def _open_calendar(self):
+    def _open_season_info(self):
+        self._season_info.reset()   # always land on the tab bar, not the last-viewed sub-tab
         self._stack.setCurrentIndex(3)
-
-    def _open_season_stats_screen(self):
-        self._season_stats_screen.reset()   # always land on the tab bar, not the last-viewed sub-tab
-        self._stack.setCurrentIndex(4)
 
     def _go_next(self):
         # "TO NEXT SEASON" (season just finished): open next year's calendar
@@ -3512,7 +3375,7 @@ class SeasonHubPage(QWizardPage):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._wiz.accept()      # bail out of the season start -> Home
 
-    # ── Background painting: static image behind the hub/profile/calendar ────
+    # ── Background painting: static image behind the hub/profile/season info ─
     # (the intro is a separate, fully opaque video widget — see _SeasonIntroVideo)
 
     def paintEvent(self, event):
@@ -3535,4 +3398,8 @@ class SeasonHubPage(QWizardPage):
             # continue that same tint (over the photo _GapFiller already
             # painted) into the strip so the overlay reaches the very bottom
             # edge instead of leaving a photo sliver below it.
+            painter.fillRect(rect, _PANEL_TINT)
+        elif self._stack.currentIndex() == 3 and self._season_info.is_opened():
+            # Same continuation for a full-bleed Season Info sub-view (Standings
+            # or Calendar).
             painter.fillRect(rect, _PANEL_TINT)

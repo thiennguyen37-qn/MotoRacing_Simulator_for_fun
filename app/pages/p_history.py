@@ -539,7 +539,7 @@ class _RiderRecordDetail(QWidget):
             return 'close' if key in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace) else None
         K = Qt.Key
         if key in (K.Key_Left, K.Key_Right):          # scroll a wide race grid
-            self._hscroll(-110 if key == K.Key_Left else 110)
+            self._hscroll(-37 if key == K.Key_Left else 37)
         elif key in (K.Key_Up, K.Key_Down):
             self._scroll(-60 if key == K.Key_Up else 60)
         elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
@@ -1510,7 +1510,7 @@ class _SeasonStatDetail(QWidget):
                 return 'close'
         elif v == 'fs':
             if key in (K.Key_Left, K.Key_Right):        # scroll the wide matrix
-                self._hscroll(-110 if key == K.Key_Left else 110)
+                self._hscroll(-37 if key == K.Key_Left else 37)
             elif key in (K.Key_Up, K.Key_Down):
                 self._scroll(-60 if key == K.Key_Up else 60)
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):

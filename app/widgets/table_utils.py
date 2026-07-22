@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (QTableWidget, QTableWidgetItem,
-                              QStyledItemDelegate, QHeaderView)
+                              QStyledItemDelegate, QHeaderView, QAbstractItemView)
 from PyQt6.QtGui import QColor, QFont, QBrush, QPen
 from PyQt6.QtCore import Qt, QRect, QSize
 
@@ -205,6 +205,14 @@ def make_table(headers: list[str]) -> QTableWidget:
     t.verticalHeader().setVisible(False)
     t.setFont(QFont('Segoe UI', 11))
     t.setShowGrid(False)
+    # Default is per-item scrolling (one scrollbar "step" = one whole row/
+    # column) — every arrow-key handler in this codebase drives these bars
+    # with small pixel deltas expecting a gentle nudge, but per-item units on
+    # a table with only a handful of rows/columns overshoot the remaining
+    # range in a single step and clamp straight to the far edge. Per-pixel
+    # scrolling makes the bar's value actually mean pixels.
+    t.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    t.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
     t.verticalHeader().setDefaultSectionSize(42)
     t.horizontalHeader().setDefaultAlignment(
         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter

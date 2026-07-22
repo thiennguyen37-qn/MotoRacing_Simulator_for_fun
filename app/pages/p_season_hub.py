@@ -751,7 +751,7 @@ class _ProfileScreen(QWidget):
             self._opened = False
             self._content.setCurrentIndex(0)
         elif key in (K.Key_Up, K.Key_Down, K.Key_Left, K.Key_Right):
-            dx = (-80 if key == K.Key_Left else 80 if key == K.Key_Right else 0)
+            dx = (-27 if key == K.Key_Left else 27 if key == K.Key_Right else 0)
             dy = (-60 if key == K.Key_Up else 60 if key == K.Key_Down else 0)
             view = (self._basic, self._results, self._rating)[self._focus]
             if hasattr(view, 'scroll_by'):

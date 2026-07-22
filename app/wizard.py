@@ -109,6 +109,13 @@ class MotoWizard(QWizard):
         # SeasonHubPage._refresh_data / GpMapPage.
         self.gp_recap_dismissed_for = None
 
+        # Career only: True between a season being finished (Standings' "Finish")
+        # and the next season's calendar being opened. While set, the Season Hub
+        # shows its "TO NEXT SEASON" summary (final standings + champion, no map)
+        # instead of a between-GP or new-season blank — see
+        # SeasonHubPage._refresh_data / _go_next and begin_next_season_setup.
+        self.season_complete = False
+
         # Which of the CAREER_SLOTS (0-9) the current Career session reads/
         # writes — set by CareerPage before any save/history/rider call.
         self.career_slot = None
@@ -303,6 +310,27 @@ class MotoWizard(QWizard):
             self.back()
         if self.currentId() == self.ID_SEASON_HUB:
             self.currentPage().resume_at_hub()
+
+    def begin_next_season_setup(self):
+        """Roll a finished season into next year's calendar setup: clear the
+        season-complete flag, bump the year, wipe the finished season's running
+        state and open the Calendar (skipping its New/Continue menu). The
+        finished season must already be archived (p4._save_history) first.
+        Shared by Championship's "Next Season" button and the career Season
+        Hub's "TO NEXT SEASON" card."""
+        self.season_complete = False
+        self.season_year  += 1
+        self.circuit_index = 0
+        self.all_race_pts  = []
+        self.race_pts      = []
+        self.race_results  = []
+        self.race_fastest_laps = []
+        self.round_results = []
+        while self.currentId() not in (self.ID_CALENDAR, self.startId()):
+            self.back()
+        if self.currentId() == self.ID_CALENDAR:
+            # skip the New/Continue menu — the career/championship carries on
+            self.currentPage().begin_followup_season()
 
     def accept(self):
         """Finishing any mode returns to the home page — the app only exits
@@ -504,7 +532,13 @@ class MotoWizard(QWizard):
             'all_race_pts':  [df.to_dict('records') for df in self.all_race_pts],
             'round_results': [
                 {'circuit': str(rd['circuit']), 'country': str(rd['country']),
-                 'races': [df.to_dict('records') for df in rd['races']]}
+                 'races': [df.to_dict('records') for df in rd['races']],
+                 # Persist the round's fastest-lap records too — without this a
+                 # round played before an app restart/resume lost them, so the
+                 # season archived with lap_records=None for every round except
+                 # the last few played in the final unbroken session (which is
+                 # why some tracks' Best Race Lap / All-Time Record read blank).
+                 'lap_records': rd.get('lap_records')}
                 for rd in self.round_results],
         }
         self.season_save_path().write_text(json.dumps(data, default=int), encoding='utf-8')

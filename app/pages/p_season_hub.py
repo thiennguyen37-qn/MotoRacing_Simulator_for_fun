@@ -217,6 +217,30 @@ class _TopTabBar(QWidget):
         return list(self._tabs)
 
 
+class _SideTabBar(QWidget):
+    """A vertical stack of short tab bars, pinned to the top-left — the Your
+    Profile sub-hub's browse menu. Up/Down moves the focus (contrast
+    _TopTabBar's full-width horizontal row driven by Left/Right)."""
+
+    _BAR_W = 280
+
+    def __init__(self, labels: list):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(10)
+        self._tabs = []
+        for lbl in labels:
+            b = _TabButton(lbl)
+            b.setFixedWidth(self._BAR_W)
+            self._tabs.append(b)
+            outer.addWidget(b)
+
+    def cards(self) -> list:
+        return list(self._tabs)
+
+
 _PANEL_TINT = QColor(5, 5, 14, 200)
 
 
@@ -233,11 +257,17 @@ class _TintWrap(QWidget):
     The inner widget's own layout margin matches the tint's inset, so a
     scrollable child (and its scrollbar) stays confined to the tinted card
     at every scroll position instead of the tint only covering however much
-    fit on screen when the view first opened."""
+    fit on screen when the view first opened.
 
-    def __init__(self, inner: QWidget, margin: int = _TINT_MARGIN):
+    `full_bleed` paints the tint edge-to-edge over the whole screen (no photo
+    rim, no rounded corners) while keeping the content's layout margin for
+    padding — used by the Your Profile sub-views, which own the full screen
+    once opened and read best against a solid backdrop."""
+
+    def __init__(self, inner: QWidget, margin: int = _TINT_MARGIN, full_bleed: bool = False):
         super().__init__()
         self._margin = margin
+        self._full_bleed = full_bleed
         lay = QVBoxLayout(self)
         lay.setContentsMargins(margin, margin, margin, margin)
         lay.addWidget(inner)
@@ -245,6 +275,9 @@ class _TintWrap(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self._full_bleed:
+            p.fillRect(self.rect(), _PANEL_TINT)
+            return
         m = self._margin
         r = QRectF(self.rect().adjusted(m, m, -m, -m))
         path = QPainterPath()
@@ -272,10 +305,10 @@ class _BasicInfoView(QWidget):
         outer.setSpacing(0)
 
         title = QLabel('BASIC INFO')
-        title.setFont(QFont('Segoe UI', 21, QFont.Weight.Bold))
+        title.setFont(QFont('Segoe UI', 27, QFont.Weight.Bold))
         title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
         outer.addWidget(title)
-        outer.addSpacing(18)
+        outer.addSpacing(22)
 
         body = QWidget()
         body.setStyleSheet('background: transparent;')
@@ -288,15 +321,15 @@ class _BasicInfoView(QWidget):
         fields_w.setStyleSheet('background: transparent;')
         fields_lay = QVBoxLayout(fields_w)
         fields_lay.setContentsMargins(0, 0, 0, 0)
-        fields_lay.setSpacing(11)
+        fields_lay.setSpacing(15)
         fields_lay.addStretch(1)
         self._values = {}
         for key in self.FIELDS:
             kl = QLabel(key)
-            kl.setFont(QFont('Segoe UI', 9))
+            kl.setFont(QFont('Segoe UI', 11))
             kl.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
             vl = QLabel('—')
-            vl.setFont(QFont('Segoe UI', 15, QFont.Weight.Bold))
+            vl.setFont(QFont('Segoe UI', 20, QFont.Weight.Bold))
             vl.setStyleSheet('color:#ffffff; background:transparent; border:none;')
             row = QVBoxLayout()
             row.setSpacing(2)
@@ -325,7 +358,7 @@ class _BasicInfoView(QWidget):
         right_lay.addSpacing(14)
 
         summary_title = QLabel('CAREER SUMMARY')
-        summary_title.setFont(QFont('Segoe UI', 9))
+        summary_title.setFont(QFont('Segoe UI', 11))
         summary_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         summary_title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
         right_lay.addWidget(summary_title, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -349,7 +382,7 @@ class _BasicInfoView(QWidget):
         self._values['BIKE NUMBER'].setText(f"#{rider.get('bike_number', '—')}")
         self._values['TEAM'].setText(str(rider.get('team', '—')))
         self._values['MANUFACTURER'].setText(str(rider.get('manufacturer', '—')))
-        pix = _big_bike_pixmap(rider.get('team', ''), height=188)
+        pix = _big_bike_pixmap(rider.get('team', ''), height=214)
         self._bike_lbl.setPixmap(pix if pix is not None else QPixmap())
 
         while self._summary_lay.count():
@@ -359,7 +392,7 @@ class _BasicInfoView(QWidget):
                 w.setParent(None)
         totals = rec or {}
         self._summary_lay.addWidget(
-            _stat_tiles([(label, totals.get(key, 0)) for label, key in _TOTAL_COLS], spacing=26))
+            _stat_tiles([(label, totals.get(key, 0)) for label, key in _TOTAL_COLS], spacing=32))
 
 
 # ── Your Profile: Results (career race-by-race, reuses the Rider Stats grid) ──
@@ -373,10 +406,10 @@ class _ResultsView(QWidget):
         self._lay.setSpacing(0)
 
         title = QLabel('CAREER RESULTS')
-        title.setFont(QFont('Segoe UI', 26, QFont.Weight.Bold))
+        title.setFont(QFont('Segoe UI', 30, QFont.Weight.Bold))
         title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
         self._lay.addWidget(title)
-        self._lay.addSpacing(20)
+        self._lay.addSpacing(22)
         self._lay.addStretch(1)
         self._body = None
 
@@ -391,10 +424,25 @@ class _ResultsView(QWidget):
         else:
             note = QLabel('No race results recorded yet — check back after your first season.')
             note.setWordWrap(True)
-            note.setFont(QFont('Segoe UI', 11))
+            note.setFont(QFont('Segoe UI', 14))
             note.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
             self._body = note
         self._lay.insertWidget(self._lay.count() - 1, self._body)
+
+    def scroll_by(self, dx: int, dy: int):
+        """Pan the race-by-race table with the arrow keys. It's a QTableWidget
+        with its OWN scrollbars (wider than the card via R1…Rn, taller via a
+        row per season); the wrapping QScrollArea can't move it — its
+        horizontal bar is off and the table fits it vertically — so drive the
+        table's own bars directly. A no-op on the placeholder note (a QLabel
+        has no scrollbars)."""
+        body = self._body
+        hbar = getattr(body, 'horizontalScrollBar', None)
+        vbar = getattr(body, 'verticalScrollBar', None)
+        if dx and callable(hbar):
+            bar = hbar(); bar.setValue(bar.value() + dx)
+        if dy and callable(vbar):
+            bar = vbar(); bar.setValue(bar.value() + dy)
 
 
 # ── Your Profile: Rating (ability bars) ───────────────────────────────────────
@@ -409,7 +457,7 @@ class _RatingBar(QWidget):
         self._value = value
         self._color = QColor(color_hex)
         self._fill  = value / 100.0
-        self.setFixedHeight(30)
+        self.setFixedHeight(38)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
@@ -417,29 +465,29 @@ class _RatingBar(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        label_w, val_w = 190, 48
+        label_w, val_w = 240, 60
         bar_x = label_w
         bar_w = w - label_w - val_w - 12
 
-        p.setFont(QFont('Segoe UI', 12))
+        p.setFont(QFont('Segoe UI', 15))
         p.setPen(QColor('#ffffff'))
         p.drawText(QRect(0, 0, label_w, h),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                    self._label)
 
-        tr = QRectF(bar_x, h / 2 - 6, bar_w, 12)
-        tp = QPainterPath(); tp.addRoundedRect(tr, 6, 6)
+        tr = QRectF(bar_x, h / 2 - 7, bar_w, 14)
+        tp = QPainterPath(); tp.addRoundedRect(tr, 7, 7)
         p.fillPath(tp, QColor(22, 22, 38, 200))
 
-        fw = max(12.0, bar_w * self._fill)
-        fr = QRectF(bar_x, h / 2 - 6, fw, 12)
-        fp = QPainterPath(); fp.addRoundedRect(fr, 6, 6)
+        fw = max(14.0, bar_w * self._fill)
+        fr = QRectF(bar_x, h / 2 - 7, fw, 14)
+        fp = QPainterPath(); fp.addRoundedRect(fr, 7, 7)
         g = QLinearGradient(bar_x, 0, bar_x + fw, 0)
         g.setColorAt(0, self._color.darker(145))
         g.setColorAt(1, self._color)
         p.fillPath(fp, g)
 
-        p.setFont(QFont('Segoe UI', 12, QFont.Weight.Bold))
+        p.setFont(QFont('Segoe UI', 15, QFont.Weight.Bold))
         p.setPen(QColor('#ffffff'))
         p.drawText(QRect(w - val_w, 0, val_w, h),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
@@ -451,7 +499,7 @@ class _RatingPowerBar(QWidget):
         super().__init__()
         self._score = score
         self._fill  = score / 100.0
-        self.setFixedHeight(42)
+        self.setFixedHeight(52)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
@@ -459,30 +507,30 @@ class _RatingPowerBar(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        label_w, val_w = 190, 100
+        label_w, val_w = 240, 130
         bar_x = label_w
         bar_w = w - label_w - val_w - 12
 
-        p.setFont(QFont('Segoe UI', 13, QFont.Weight.Bold))
+        p.setFont(QFont('Segoe UI', 16, QFont.Weight.Bold))
         p.setPen(QColor('#ffffff'))
         p.drawText(QRect(0, 0, label_w, h),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                    'POWER RATING')
 
-        tr = QRectF(bar_x, h / 2 - 8, bar_w, 16)
-        tp = QPainterPath(); tp.addRoundedRect(tr, 8, 8)
+        tr = QRectF(bar_x, h / 2 - 9, bar_w, 18)
+        tp = QPainterPath(); tp.addRoundedRect(tr, 9, 9)
         p.fillPath(tp, QColor(22, 22, 38, 200))
 
-        fw = max(16.0, bar_w * self._fill)
-        fr = QRectF(bar_x, h / 2 - 8, fw, 16)
-        fp = QPainterPath(); fp.addRoundedRect(fr, 8, 8)
+        fw = max(18.0, bar_w * self._fill)
+        fr = QRectF(bar_x, h / 2 - 9, fw, 18)
+        fp = QPainterPath(); fp.addRoundedRect(fr, 9, 9)
         g = QLinearGradient(bar_x, 0, bar_x + fw, 0)
         g.setColorAt(0.0, QColor('#0f6b22'))
         g.setColorAt(0.5, QColor('#22c044'))
         g.setColorAt(1.0, QColor('#5eff7e'))
         p.fillPath(fp, g)
 
-        p.setFont(QFont('Segoe UI', 14, QFont.Weight.Bold))
+        p.setFont(QFont('Segoe UI', 17, QFont.Weight.Bold))
         p.setPen(QColor('#ffffff'))
         p.drawText(QRect(w - val_w, 0, val_w, h),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
@@ -502,10 +550,10 @@ class _RatingView(QWidget):
         lay.setSpacing(0)
 
         title = QLabel('YOUR RATING')
-        title.setFont(QFont('Segoe UI', 21, QFont.Weight.Bold))
+        title.setFont(QFont('Segoe UI', 27, QFont.Weight.Bold))
         title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
         lay.addWidget(title)
-        lay.addSpacing(20)
+        lay.addSpacing(22)
 
         lay.addStretch(1)
 
@@ -513,7 +561,7 @@ class _RatingView(QWidget):
         self._bars_holder.setStyleSheet('background: transparent;')
         self._bars_lay = QVBoxLayout(self._bars_holder)
         self._bars_lay.setContentsMargins(0, 0, 0, 0)
-        self._bars_lay.setSpacing(13)
+        self._bars_lay.setSpacing(16)
         lay.addWidget(self._bars_holder)
         lay.addSpacing(18)
 
@@ -545,10 +593,11 @@ class _RatingView(QWidget):
 # ── Your Profile sub-hub: Basic Info / Results / Rating ───────────────────────
 
 class _ProfileScreen(QWidget):
-    """Same focus-then-open interaction as the main hub, nested one level in:
-    Left/Right moves the tab focus, Enter opens that sub-view (with a dark
-    tint over the background for readability), Escape closes it back to the
-    tab bar — a second Escape bubbles up to the main hub."""
+    """Focus-then-open interaction: a stack of short tab bars pinned top-left,
+    Up/Down moves the focus, Enter opens that sub-view FULL-SCREEN (the tabs
+    give way to it, with a dark tint over the background for readability),
+    Escape closes it back to the tab stack — a second Escape bubbles up to the
+    main hub."""
 
     SUB_TABS = ['BASIC INFO', 'RESULTS', 'RATING']
 
@@ -559,18 +608,25 @@ class _ProfileScreen(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        self._tabbar = _TopTabBar(self.SUB_TABS)
-        outer.addWidget(self._tabbar)
-
         self._basic = _BasicInfoView()
         self._results = _ResultsView()
         self._rating = _RatingView()
 
         self._content = QStackedWidget()
         self._content.setStyleSheet('background: transparent;')
-        blank = QWidget()
-        blank.setStyleSheet('background: transparent;')
-        self._content.addWidget(blank)                             # 0 nothing opened
+        # Index 0 (browse): the short tab bars stacked in the top-left corner
+        # over the career background — Enter swaps to a full-screen view below,
+        # so the tabs aren't kept alongside it (they live on this page only).
+        self._sidebar = _SideTabBar(self.SUB_TABS)
+        browse_page = QWidget()
+        browse_page.setStyleSheet('background: transparent;')
+        bp_lay = QVBoxLayout(browse_page)
+        bp_lay.setContentsMargins(48, 40, 48, 40)
+        bp_lay.setSpacing(0)
+        bp_lay.addWidget(self._sidebar, 0,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        bp_lay.addStretch(1)
+        self._content.addWidget(browse_page)                       # 0 nothing opened
 
         # Only Results can outgrow the panel (a long career's race-by-race
         # grid) — Basic Info and Rating are fixed, bounded content and don't
@@ -581,15 +637,20 @@ class _ProfileScreen(QWidget):
                 sc = _make_scroll_area()
                 sc.setWidget(view)
                 self._scrolls.append(sc)
-                self._content.addWidget(_TintWrap(sc))              # 1/2/3
+                self._content.addWidget(_TintWrap(sc, full_bleed=True))   # 1/2/3
             else:
                 self._scrolls.append(None)
-                self._content.addWidget(_TintWrap(view))
+                self._content.addWidget(_TintWrap(view, full_bleed=True))
 
         outer.addWidget(self._content, 1)
 
         self._focus = 0
         self._opened = False
+
+    def is_opened(self) -> bool:
+        """True while a sub-view is showing full-bleed (not the tab bar) — the
+        hub uses this to tint the reserved bottom strip to match."""
+        return self._opened
 
     def load(self, rider: dict, rec: dict | None):
         self._basic.load(rider, rec)
@@ -610,15 +671,15 @@ class _ProfileScreen(QWidget):
                     bar.setValue(0)
 
     def _sync_focus(self):
-        for i, c in enumerate(self._tabbar.cards()):
+        for i, c in enumerate(self._sidebar.cards()):
             c.set_focused(i == self._focus)
 
     def handle_key(self, key: int):
         """Returns 'close' when the caller should return to the main hub."""
         K = Qt.Key
         if not self._opened:
-            if key in (K.Key_Left, K.Key_Right):
-                self._focus = (self._focus + (1 if key == K.Key_Right else -1)) % 3
+            if key in (K.Key_Up, K.Key_Down):     # vertical stack of tab bars
+                self._focus = (self._focus + (1 if key == K.Key_Down else -1)) % 3
                 self._sync_focus()
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
                 self._opened = True
@@ -630,12 +691,20 @@ class _ProfileScreen(QWidget):
         if key in (K.Key_Escape, K.Key_Backspace):
             self._opened = False
             self._content.setCurrentIndex(0)
-        elif key in (K.Key_Up, K.Key_Down):
-            sc = self._scrolls[self._focus]
-            if sc is not None:
-                bar = sc.verticalScrollBar()
-                if bar is not None:
-                    bar.setValue(bar.value() + (-60 if key == K.Key_Up else 60))
+        elif key in (K.Key_Up, K.Key_Down, K.Key_Left, K.Key_Right):
+            dx = (-80 if key == K.Key_Left else 80 if key == K.Key_Right else 0)
+            dy = (-60 if key == K.Key_Up else 60 if key == K.Key_Down else 0)
+            view = (self._basic, self._results, self._rating)[self._focus]
+            if hasattr(view, 'scroll_by'):
+                # Results: pan the race-by-race table (its own scrollbars — see
+                # _ResultsView.scroll_by), horizontally across R1…Rn too.
+                view.scroll_by(dx, dy)
+            elif dy:
+                sc = self._scrolls[self._focus]
+                if sc is not None:
+                    bar = sc.verticalScrollBar()
+                    if bar is not None:
+                        bar.setValue(bar.value() + dy)
         return None
 
 
@@ -687,10 +756,12 @@ class _CalendarView(QWidget):
         return self._scroll.verticalScrollBar()
 
 
-# ── Hub dashboard: last season's standings / recent form / season honours ────
+# ── Hub dashboard: this season's standings / recent form / season honours ────
 # Fills the empty space below the main hub's tab bar with a quick "where do
-# things stand" recap — all scoped to the most recently *completed* season
-# (the one about to start has no results yet).
+# things stand" recap — scoped to the season currently being played. Before
+# its first round is completed everything reads empty (a fresh season starts
+# from zero); the cumulative track-history boards and career totals are the
+# only cross-season figures.
 
 def _flatten_rounds(rounds_detail_list: list) -> list:
     """(country, race) pairs flattened across every round, in calendar order —
@@ -709,20 +780,6 @@ def _recent_form(rounds_detail_list: list, name: str, limit: int = 5) -> list:
     flat = _flatten_rounds(rounds_detail_list)
     return [(country, next((r for r in race if r['name'] == name), None))
             for country, race in flat[-limit:]]
-
-
-def _rider_recent_races(rec: dict | None, limit: int = 5) -> list:
-    """Same as _recent_form, but across every *archived* season this rider
-    has (oldest to newest) — naturally falls back into an earlier season if
-    the latest one is too short."""
-    if not rec:
-        return []
-    combined = []
-    for h in sorted(rec.get('history', []), key=lambda x: str(x['year'])):
-        rd = h.get('rounds_detail')
-        if rd:
-            combined.extend(rd)
-    return _recent_form(combined, rec.get('name'), limit)
 
 
 def _stats_from_rounds_detail(rounds_detail_list: list) -> dict:
@@ -1179,10 +1236,16 @@ class _StandingsPanel(QWidget):
             if w is not None:
                 w.setParent(None)
         if not standings:
-            ph = QLabel('No standings yet — check back after your first season.')
+            ph = QLabel('No standings yet — check back after the first round.')
             ph.setWordWrap(True)
+            ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
             ph.setFont(QFont('Segoe UI', 10))
             ph.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
+            # Hold the panel at exactly a filled 5-row page's height so an empty
+            # standings card doesn't collapse and let the Expanding Recent Form
+            # card below stretch to swallow the freed column height.
+            ph.setFixedHeight(self._PAGE_SIZE * _DASH_ROW_H
+                              + (self._PAGE_SIZE - 1) * self._rows_lay.spacing())
             self._rows_lay.addWidget(ph)
             return
         # Always exactly _PAGE_SIZE slots so every page keeps the same height
@@ -1309,6 +1372,20 @@ def _mini_board(title: str, entries: list, names_map: dict | None = None) -> QWi
     lay.addSpacing(2)
 
     names_map = names_map or {}
+    if not entries:
+        # Same "empty but not collapsed" treatment as the Standings panel:
+        # a centred note held at the board's normal (3-row) height so the
+        # column layout doesn't shift as the categories cycle while empty.
+        ph = QLabel('No results yet — check back after the first round.')
+        ph.setWordWrap(True)
+        ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ph.setFont(QFont('Segoe UI', 9))
+        ph.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
+        ph.setFixedHeight(_MINI_BOARD_SLOTS * _MINI_ROW_H
+                          + (_MINI_BOARD_SLOTS - 1) * lay.spacing())
+        lay.addWidget(ph)
+        lay.addStretch(1)
+        return col
     for i in range(1, _MINI_BOARD_SLOTS + 1):
         filled = i <= len(entries)
         row = QFrame()
@@ -1431,6 +1508,30 @@ def _info_row(label: str, label_color: str = '#9a9ab2') -> tuple:
     return row, val
 
 
+def _record_row(label: str) -> tuple:
+    """A lap-record entry for the GP Info card. Unlike _info_row (caption and
+    value fighting for one line), the caption sits on its own line with the
+    value spanning the FULL card width beneath it. A long 'time — HOLDER —
+    year' string then has the whole card to render in, so it no longer gets
+    ellipsised whenever the caption is wide ('ALL TIME LAP RECORD') or the
+    left column is narrowed — which is why some tracks' records showed cut
+    off and others didn't."""
+    box = QWidget()
+    box.setStyleSheet('background: transparent;')
+    bl = QVBoxLayout(box)
+    bl.setContentsMargins(0, 0, 0, 0)
+    bl.setSpacing(2)
+    cap = QLabel(label)
+    cap.setFont(QFont('Segoe UI', 8, QFont.Weight.Bold))
+    cap.setStyleSheet('color:#9a9ab2; letter-spacing:1px; background:transparent; border:none;')
+    val = _ElideLabel()
+    val.setFont(QFont('Segoe UI', 10, QFont.Weight.Bold))
+    val.setStyleSheet('color:#ffffff; background:transparent; border:none;')
+    bl.addWidget(cap)
+    bl.addWidget(val)
+    return box, val
+
+
 def _fmt_record(rec: tuple | None) -> str:
     """(seconds, name, year) -> 'MM:SS.mmm — HOLDER NAME — year', or '—'
     before this track has any lap-record data on file."""
@@ -1503,9 +1604,9 @@ class _NextRacePanel(QWidget):
         records_holder.setStyleSheet('background: transparent;')
         records_lay = QVBoxLayout(records_holder)
         records_lay.setContentsMargins(0, 0, 0, 0)
-        records_lay.setSpacing(6)
-        self._brlc_row, self._brlc_val = _info_row('BEST RACE LAP')
-        self._blc_row, self._blc_val = _info_row('ALL TIME LAP RECORD')
+        records_lay.setSpacing(8)
+        self._brlc_row, self._brlc_val = _record_row('BEST RACE LAP')
+        self._blc_row, self._blc_val = _record_row('ALL TIME LAP RECORD')
         records_lay.addWidget(self._brlc_row)
         records_lay.addWidget(self._blc_row)
         lay.addWidget(records_holder)
@@ -1748,7 +1849,8 @@ class _UpcomingSessionPanel(QWidget):
         lay.setContentsMargins(14, 14, 14, 14)
         lay.setSpacing(0)
 
-        lay.addWidget(_panel_title('UPCOMING SESSION'))
+        title_w, self._card_title = _panel_title_parts('UPCOMING SESSION')
+        lay.addWidget(title_w)
         lay.addItem(_soft_gap(18))
 
         # ── Normal: session name + second divider + weather block ──────────
@@ -1806,15 +1908,27 @@ class _UpcomingSessionPanel(QWidget):
 
     def load(self, session_name: str, weather: str = '—',
              temperature: str = '—', humidity: str = '—',
-             next_gp_country: str | None = None):
-        if next_gp_country:
+             next_gp_country: str | None = None, champion: str | None = None):
+        if champion:
+            # Season finale: crown the champion in place of the flag/GP-name
+            # (reuse the centred nextgp box, flag hidden — the off-season has no
+            # country to show).
+            self._card_title.setText('SEASON COMPLETE')
+            self._flag_lbl.setVisible(False)
+            self._gp_name_lbl.setText(f'🏆  {str(champion).upper()}\nSEASON CHAMPION')
+            self._session_box.setVisible(False)
+            self._nextgp_box.setVisible(True)
+        elif next_gp_country:
+            self._card_title.setText('UPCOMING SESSION')
             country = str(next_gp_country)
             pix = _flag_pixmap(country, height=_GP_FLAG_H, width=_GP_FLAG_W) if country else None
+            self._flag_lbl.setVisible(True)
             self._flag_lbl.setPixmap(pix if pix is not None else QPixmap())
             self._gp_name_lbl.setText(f'GRAND PRIX OF {country.upper()}')
             self._session_box.setVisible(False)
             self._nextgp_box.setVisible(True)
         else:
+            self._card_title.setText('UPCOMING SESSION')
             self._name_lbl.setText(str(session_name).upper())
             self._weather_val.setFullText(str(weather))
             self._temp_val.setFullText(str(temperature))
@@ -2083,10 +2197,11 @@ class _WinnerFavouritesPanel(QWidget):
             if w is not None:
                 w.setParent(None)
 
-    def load(self, favourites: list | None = None, gp_result: list | None = None):
+    def load(self, favourites: list | None = None, gp_result: list | None = None,
+             result_title: str | None = None):
         self._clear_body()
         if gp_result is not None:
-            self._title_lbl.setText('GRAND PRIX RESULT')
+            self._title_lbl.setText(result_title or 'GRAND PRIX RESULT')
             self._render_result(gp_result)
         else:
             self._title_lbl.setText('GRAND PRIX WINNER FAVOURITES')
@@ -2208,7 +2323,14 @@ _HUB_SIDE_MARGIN = 56  # dashboard's outer left/right margin
 # floor is high because Recent Form's five fixed 60px flag boxes can't shrink.
 _HUB_LEFT_MIN  = 268
 _HUB_RIGHT_MIN = 360
-_HUB_MID_MIN   = 210   # the middle column never gets squeezed below this
+# Sized to hold the Winner-Favourites bar chart (3 fixed 94px name columns +
+# their 30px gaps + card padding ≈ 394px). Keeping this at/above the middle
+# card's real content minimum makes _relayout_columns' max(_HUB_MID_MIN,
+# middle.minimumSizeHint()) resolve to this CONSTANT in every state — so the
+# middle column no longer widens for the bar chart and narrows for the
+# between-GP "Grand Prix Result" rows, which was jittering the side columns
+# (and clipping the left card's long lap-record lines) as the hub cycled.
+_HUB_MID_MIN   = 400   # the middle column never gets squeezed below this
 
 
 class _HubDashboard(QWidget):
@@ -2410,22 +2532,25 @@ class _HubDashboard(QWidget):
             brlc: tuple | None = None, blc: tuple | None = None,
             upcoming_session: str = '', favourites: list | None = None,
             weather: dict | None = None, next_gp_country: str | None = None,
-            gp_result: list | None = None):
+            gp_result: list | None = None, result_title: str | None = None,
+            champion: str | None = None):
         self._standings.load(standings, team_standings, manu_standings)
         self._form.load(races)
         self._overall_stats.load(honours, names_map)
         self._next_race.load(next_circuit, brlc, blc)
         self._track_history.load(track_winners or [], track_polesitters or [], names_map)
         weather = weather or {}
-        # next_gp_country set -> "between grand prix" look (flag + GP name,
-        # no weather); gp_result set -> the finished GP's top-5 point scorers
-        # in place of the winner-favourites bar chart. Both come together on
-        # the post-Finish "TO NEXT GRAND PRIX" landing.
+        # champion set -> season-finale look (trophy + champion name, no session
+        # or weather); next_gp_country set -> "between grand prix" look (flag +
+        # GP name, no weather); gp_result set -> a top-5 result list (finished
+        # GP's point scorers, or the final standings on the finale) in place of
+        # the winner-favourites bar chart.
         self._upcoming.load(upcoming_session, weather=weather.get('label', '—'),
                             temperature=f"{weather['temp']}°C" if 'temp' in weather else '—',
                             humidity=f"{weather['humidity']}%" if 'humidity' in weather else '—',
-                            next_gp_country=next_gp_country)
-        self._favourites.load(favourites=favourites, gp_result=gp_result)
+                            next_gp_country=next_gp_country, champion=champion)
+        self._favourites.load(favourites=favourites, gp_result=gp_result,
+                              result_title=result_title)
         # Rows are in place now — match the Standings card's height on the next
         # tick (after the layout settles).
         QTimer.singleShot(0, self._sync_upcoming_height)
@@ -2898,15 +3023,34 @@ class SeasonHubPage(QWizardPage):
             return []
 
     def _build_live_rounds_detail(self) -> list:
-        """Convert the wizard's in-memory, not-yet-archived round_results for
-        the season currently being played into the same rounds_detail shape
+        """Convert the wizard's in-memory, not-yet-archived rounds for the
+        season currently being played into the same rounds_detail shape
         history.json uses (mirrors p4_championship._save_history), so a
         season shows dashboard info from its 1st round onward instead of only
-        after the whole season is archived at season end."""
+        after the whole season is archived at season end.
+
+        Includes the round currently being played (its already-finished races
+        from wiz.race_results, not yet banked into round_results) — mirroring
+        p4._season_rounds() — so a just-completed Race 1 refreshes the
+        dashboard (standings, recent form, lap records) immediately instead of
+        only once Race 2 banks the whole round."""
         wiz = self._wiz
         df = getattr(wiz, 'df', None)
-        rounds = getattr(wiz, 'round_results', None)
-        if df is None or not rounds:
+        if df is None:
+            return []
+        # Banked rounds + the in-progress one (built exactly as _bank_round
+        # will bank it). A race lives in exactly one of round_results /
+        # race_results at any moment, so this never double-counts.
+        rounds = list(getattr(wiz, 'round_results', None) or [])
+        live_races = getattr(wiz, 'race_results', None)
+        circuit = getattr(wiz, 'circuit', None)
+        if live_races and circuit is not None:
+            from app.pages.p4_championship import _round_lap_records
+            rounds = rounds + [{'circuit': circuit['circuit_name'],
+                                'country': circuit['country'],
+                                'races': list(live_races),
+                                'lap_records': _round_lap_records(wiz)}]
+        if not rounds:
             return []
         roster = {str(r['name']): (int(r['bike_number']), str(r['team']), str(r['manufacturer']))
                   for _, r in df.iterrows()}
@@ -2943,6 +3087,7 @@ class SeasonHubPage(QWizardPage):
         # round onward) — only fall back to the last *archived* season when
         # nothing's been played yet this season (e.g. right at season start).
         live_rounds = self._build_live_rounds_detail()
+        season_complete = bool(self._wiz.season_complete)
         data = None
         if live_rounds:
             data = _season_tables_data({'rounds_detail': live_rounds})
@@ -2953,18 +3098,35 @@ class SeasonHubPage(QWizardPage):
             honours = _honours_data(data)['riders'] if data is not None else None
             recent_races = _recent_form(live_rounds, name or '')
             current_rounds_detail = live_rounds
-        else:
-            # seasons[] is append-ordered, so the last entry is the latest
-            # one archived (see p4_championship._save_history).
-            last_season = seasons[-1] if seasons else None
-            standings = last_season.get('standings', []) if last_season else []
+        elif season_complete and seasons:
+            # Season just finished (round_results cleared at Finish): show the
+            # just-archived season's FINAL standings as the "TO NEXT SEASON"
+            # summary. seasons[-1] is that season (append-ordered archive), and
+            # it's the only copy — no live_rounds — so nothing double-counts.
+            last_season = seasons[-1]
+            standings = last_season.get('standings', [])
             honours = None
-            current_rounds_detail = last_season.get('rounds_detail') if last_season else None
+            current_rounds_detail = last_season.get('rounds_detail')
             if current_rounds_detail:
                 data = _season_tables_data(last_season)
                 if data is not None:
                     honours = _honours_data(data)['riders']
-            recent_races = _rider_recent_races(None)   # filled in below once `rec` exists
+            recent_races = _recent_form(current_rounds_detail or [], name or '')
+        else:
+            # No round completed in the current season yet (e.g. right after
+            # advancing to a new season): show an EMPTY season dashboard rather
+            # than the just-finished season's results. Standings / honours /
+            # team + manufacturer tables visibly reset to zero and refill from
+            # this season's first completed round. Career totals (the profile
+            # `rec` below) and the track-history boards stay cumulative — they
+            # aggregate every archived season, not just the current one.
+            standings = []
+            honours = None
+            data = None
+            current_rounds_detail = None
+            # Recent Form is season-scoped too: an empty new season shows blank
+            # form boxes rather than trailing in last season's final results.
+            recent_races = []
 
         # Your Profile's Career Summary / Results should reflect the season
         # in progress too, not just fully-archived ones — fold the live
@@ -2983,8 +3145,6 @@ class SeasonHubPage(QWizardPage):
                 rec = {'name': name, **entry}    # _build_rider_race_matrix expects rec['name']
         self._profile.load(rider, rec)
         self._profile.reset()
-        if not live_rounds:
-            recent_races = _rider_recent_races(rec)
 
         team_standings = ([{'name': t, 'points': data['team_total'][t]} for t in data['teams_sorted']]
                           if data is not None else [])
@@ -3007,9 +3167,12 @@ class SeasonHubPage(QWizardPage):
         # (wiz.gp_recap_dismissed_for) — otherwise the still-persistent
         # session_index/circuit_index state would show the recap again right
         # after leaving it.
-        show_next_gp = (wiz.session_index == 0 and wiz.circuit_index > 0
+        show_next_gp = (not season_complete and wiz.session_index == 0 and wiz.circuit_index > 0
                         and wiz.gp_recap_dismissed_for != wiz.circuit_index)
-        self._hub.cards()[0].set_text('TO NEXT GRAND PRIX' if show_next_gp else 'TO NEXT SESSION')
+        if season_complete:
+            self._hub.cards()[0].set_text('TO NEXT SEASON')
+        else:
+            self._hub.cards()[0].set_text('TO NEXT GRAND PRIX' if show_next_gp else 'TO NEXT SESSION')
 
         # circuit_index always points at the round about to be played next
         # (p4._bank_round() bumps it after a round is banked). On the between-GP
@@ -3018,9 +3181,15 @@ class SeasonHubPage(QWizardPage):
         def _season_row(idx):
             return (season_df.iloc[idx]
                     if season_df is not None and 0 <= idx < len(season_df) else None)
-        play_row = _season_row(wiz.circuit_index)          # the round to be played next
-        display_row = _season_row(wiz.circuit_index - 1) if show_next_gp else play_row
-        next_gp_row = play_row if show_next_gp else None    # middle preview of what's next
+        if season_complete:
+            # Off-season: no active/next GP — the left card reads "OFF-SEASON"
+            # and there's no weather or map (the next season's calendar isn't
+            # chosen yet).
+            play_row = display_row = next_gp_row = None
+        else:
+            play_row = _season_row(wiz.circuit_index)          # the round to be played next
+            display_row = _season_row(wiz.circuit_index - 1) if show_next_gp else play_row
+            next_gp_row = play_row if show_next_gp else None    # middle preview of what's next
 
         # Arm the map transition for "To next grand prix" (see _go_next/
         # nextId()) when this is the between-GP landing — flies from the
@@ -3054,13 +3223,20 @@ class SeasonHubPage(QWizardPage):
             wiz.weekend_weather['day'] = day
         weather = wiz.weekend_weather
 
-        # Middle bottom card: the between-GP landing shows the finished GP's
-        # top-5 point scorers (across its two races); otherwise the winner-
-        # favourites estimate for the upcoming GP.
+        # Middle bottom card: season finale shows the final championship top-5;
+        # the between-GP landing shows the finished GP's top-5 point scorers
+        # (across its two races); otherwise the winner-favourites estimate for
+        # the upcoming GP.
         favourites = None
         gp_result = None
+        result_title = None
+        champion = None
         next_gp_country = str(next_gp_row['country']) if next_gp_row is not None else None
-        if show_next_gp:
+        if season_complete:
+            gp_result = standings[:5]
+            result_title = 'FINAL STANDINGS'
+            champion = standings[0].get('name') if standings else None
+        elif show_next_gp:
             gp_result = _gp_point_scorers(live_rounds[-1]) if live_rounds else []
         else:
             # Recent form spans archived seasons + the live one so an early-
@@ -3083,9 +3259,21 @@ class SeasonHubPage(QWizardPage):
                 grid_df=wiz.grid_all_df, is_wet=bool(weather.get('is_wet')),
                 race1_podium=race1_podium)
 
+        # Team/manufacturer colours for the row-fill boards (Overall Stats +
+        # Track History). `data['names']` only exists once this season has a
+        # completed round; the current roster is a season-independent fallback
+        # so the cumulative Track History rows (last winners/polesitters) stay
+        # colour-filled even before the new season has produced any results.
+        df = getattr(wiz, 'df', None)
+        names_map = ({str(r['name']): {'team': str(r['team']),
+                                       'manufacturer': str(r['manufacturer'])}
+                      for _, r in df.iterrows()} if df is not None else {})
+        if data is not None:
+            names_map.update(data['names'])
+
         self._hub_dashboard.load(standings, recent_races, honours,
                                  team_standings, manu_standings,
-                                 data['names'] if data is not None else {},
+                                 names_map,
                                  next_circuit=display_row,
                                  track_winners=track_winners,
                                  track_polesitters=track_polesitters,
@@ -3094,7 +3282,9 @@ class SeasonHubPage(QWizardPage):
                                  weather=weather,
                                  favourites=favourites,
                                  next_gp_country=next_gp_country,
-                                 gp_result=gp_result)
+                                 gp_result=gp_result,
+                                 result_title=result_title,
+                                 champion=champion)
         self._season_stats_screen.load(standings, name or '', honours, trend)
 
         self._calendar.load(self._wiz.season_df)
@@ -3212,7 +3402,14 @@ class SeasonHubPage(QWizardPage):
             return True
 
         if idx == 2:                                      # Your Profile owns its own sub-nav
-            if self._profile.handle_key(key) == 'close':
+            result = self._profile.handle_key(key)
+            # Opening/closing a sub-view flips whether the reserved bottom strip
+            # is tinted (see paint_gap_overlay); the gap filler is a separate
+            # overlay widget that won't repaint on its own, so nudge it.
+            gap = getattr(self._wiz, '_gap_filler', None)
+            if gap is not None:
+                gap.update()
+            if result == 'close':
                 self._stack.setCurrentIndex(1)
             return True
 
@@ -3242,9 +3439,13 @@ class SeasonHubPage(QWizardPage):
         self._stack.setCurrentIndex(4)
 
     def _go_next(self):
-        # nextId() routes to GpMapPage on the between-GP landing, or straight
-        # to the upcoming session's page otherwise — either way this is just
-        # the normal wizard page transition.
+        # "TO NEXT SEASON" (season just finished): open next year's calendar
+        # setup instead of a wizard page transition — there's no session/map to
+        # navigate to. Otherwise nextId() routes to GpMapPage on the between-GP
+        # landing, or straight to the upcoming session's page.
+        if self._wiz.season_complete:
+            self._wiz.begin_next_season_setup()
+            return
         self._wiz.next()
 
     def _confirm_main_menu(self):
@@ -3270,3 +3471,9 @@ class SeasonHubPage(QWizardPage):
         # sliver under the video.
         if self._stack.currentIndex() == 0:
             painter.fillRect(rect, QColor(0, 0, 0))
+        elif self._stack.currentIndex() == 2 and self._profile.is_opened():
+            # A Your Profile sub-view is open full-bleed over the whole page;
+            # continue that same tint (over the photo _GapFiller already
+            # painted) into the strip so the overlay reaches the very bottom
+            # edge instead of leaving a photo sliver below it.
+            painter.fillRect(rect, _PANEL_TINT)

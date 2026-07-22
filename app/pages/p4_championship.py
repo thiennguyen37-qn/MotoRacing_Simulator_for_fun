@@ -231,6 +231,13 @@ class ChampionshipPage(QWizardPage):
                 self._btn_next.setText('Finish' if wiz.mode == 'career'
                                        else f'▶  Next Round ({idx + 2}/{n})')
                 self._btn_finish.setVisible(False)
+            elif wiz.mode == 'career':
+                # Season finale mirrors a normal round: one plain "Finish" that
+                # drops back to the Career Hub, whose "TO NEXT SEASON" card then
+                # opens next year's setup (no separate "Next Season"/"Finish
+                # Championship" here — the hub's Main Menu tab / Esc exits home).
+                self._btn_next.setText('Finish')
+                self._btn_finish.setVisible(False)
             else:
                 self._btn_next.setText('▶  Next Season')
                 self._btn_finish.setVisible(True)
@@ -345,7 +352,9 @@ class ChampionshipPage(QWizardPage):
     def _on_next_clicked(self):
         if self._has_next_round():
             self._advance_round()
-        elif self._wiz.mode in SEASON_MODES:
+        elif self._wiz.mode == 'career':
+            self._finish_season_to_hub()
+        elif self._wiz.mode in SEASON_MODES:      # championship
             self._next_season()
         else:
             self._wiz.accept()          # random race: finish -> home
@@ -378,6 +387,10 @@ class ChampionshipPage(QWizardPage):
         else:
             self._save_history()
             wiz.save_next_season_marker()
+            if to_hub:
+                # Career final round: land on the hub's "TO NEXT SEASON"
+                # summary, same as pressing Finish (below).
+                self._mark_season_complete()
         if not to_hub:
             wiz.accept()
             return
@@ -390,23 +403,42 @@ class ChampionshipPage(QWizardPage):
             wiz.currentPage().resume_at_hub()
 
     def _next_season(self):
-        """Archive the finished season and rewind to the Season Calendar."""
+        """Championship: archive the finished season and rewind to the Season
+        Calendar. (Career routes through the Season Hub instead — see
+        _finish_season_to_hub.)"""
         wiz = self._wiz
         self._save_history()
         # marker instead of a bare clear: if the app closes while the new
         # calendar is being set up, CONTINUE still offers the next season
         wiz.save_next_season_marker()
-        wiz.season_year  += 1
+        wiz.begin_next_season_setup()
+
+    def _mark_season_complete(self):
+        """Flag the finished season and drop its running state so the Season
+        Hub shows the 'TO NEXT SEASON' summary (reading the just-archived
+        season, not a duplicate live copy) and the next season starts clean.
+        The season must already be archived (_save_history) first."""
+        wiz = self._wiz
+        wiz.season_complete = True
         wiz.circuit_index = 0
         wiz.all_race_pts  = []
         wiz.race_pts      = []
         wiz.race_results  = []
         wiz.race_fastest_laps = []
-        while wiz.currentId() not in (wiz.ID_CALENDAR, wiz.startId()):
-            wiz.back()
-        if wiz.currentId() == wiz.ID_CALENDAR:
-            # skip the New/Continue menu — the career carries straight on
-            wiz.currentPage().begin_followup_season()
+        wiz.round_results = []
+
+    def _finish_season_to_hub(self):
+        """Career season finale: archive the completed season, then drop back
+        to the Career Hub in its 'season complete' state (the "TO NEXT SEASON"
+        summary) — mirroring how a normal round's Finish returns to the hub.
+        Advancing from that hub card opens next year's calendar (see
+        SeasonHubPage._go_next / wizard.begin_next_season_setup)."""
+        wiz = self._wiz
+        self._save_history()               # archive the just-finished season (once)
+        wiz.save_next_season_marker()      # quitting now still CONTINUEs into next year
+        self._mark_season_complete()
+        wiz.session_index = 0
+        wiz.return_to_hub()
 
     def _bank_round(self):
         """Fold the just-raced round into the season totals."""

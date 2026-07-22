@@ -612,6 +612,7 @@ class CalendarPage(QWizardPage):
         wiz = self._wiz
         wiz.season_df = None
         wiz.round_results = []          # fresh season — clear past results
+        wiz.season_complete = False     # setting up a season clears the "finished" summary state
         self._assign = [None] * self._n
         for bar in self._slots:
             bar.set_circuit(None)
@@ -784,13 +785,17 @@ class CalendarPage(QWizardPage):
             self._menu_focus = 'new'
             self._update_menu_styles()
             return
+        wiz.season_complete = False   # resuming an in-progress season, not a finished one
         wiz.season_df     = wiz.circuits_df.iloc[picks].reset_index(drop=True)
         wiz.season_year   = int(data['year'])
         wiz.circuit_index = int(data['circuit_index'])
         wiz.all_race_pts  = [pd.DataFrame(r) for r in data['all_race_pts']]
         wiz.round_results = [
             {'circuit': rd['circuit'], 'country': rd['country'],
-             'races': [pd.DataFrame(x) for x in rd['races']]}
+             'races': [pd.DataFrame(x) for x in rd['races']],
+             # .get(): saves written before lap_records was persisted resume
+             # as None rather than crashing (their records are unrecoverable).
+             'lap_records': rd.get('lap_records')}
             for rd in data['round_results']]
         wiz.race_pts     = []
         wiz.race_results = []

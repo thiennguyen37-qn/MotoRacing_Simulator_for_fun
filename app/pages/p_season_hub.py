@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QWidget,
                               QLabel, QStackedWidget, QFrame, QDialog, QSizePolicy,
                               QSpacerItem, QGraphicsOpacityEffect)
 from PyQt6.QtGui import (QFont, QFontMetrics, QPainter, QColor, QPixmap, QPainterPath,
-                          QLinearGradient, QPen)
+                          QLinearGradient, QPen, QImage)
 from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint, QSize,
                           pyqtSignal, QPropertyAnimation, QParallelAnimationGroup,
                           QSequentialAnimationGroup, QEasingCurve, QAbstractAnimation)
@@ -25,18 +25,59 @@ from src.simulator import POINTS, WET_RACE_PROB_PCT
 from src.engine import fmt_lap, perf_score_race, circuit_weights, norm
 
 
-def _big_bike_pixmap(team_name: str, height: int = 200):
-    """Same source image as Gallery's _bike_pixmap, scaled straight from the
-    full-res file at a larger height — Gallery's version caches a 180px-tall
-    copy for its compact side panel, and upscaling that cached copy for this
-    page's bigger hero shot would just look blurry."""
+def _alpha_bbox(pix: QPixmap):
+    """Bounding QRect of the non-transparent pixels. The bike cutouts bake in
+    an inconsistent amount of empty margin around the motorcycle (some have
+    far more clearance below the tyres than others), which threw off pixel
+    alignment against the field rows next to it — cropping to this box first
+    makes a requested `height=` map to the visible bike, not its padding."""
+    img = pix.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+    w, h = img.width(), img.height()
+    if w == 0 or h == 0:
+        return None
+    ptr = img.bits()
+    ptr.setsize(h * img.bytesPerLine())
+    arr = np.frombuffer(ptr, dtype=np.uint8).reshape(h, img.bytesPerLine())[:, :w * 4].reshape(h, w, 4)
+    rows = np.any(arr[:, :, 3] > 10, axis=1)
+    cols = np.any(arr[:, :, 3] > 10, axis=0)
+    if not rows.any():
+        return None
+    top    = int(np.argmax(rows))
+    bottom = h - int(np.argmax(rows[::-1]))
+    left   = int(np.argmax(cols))
+    right  = w - int(np.argmax(cols[::-1]))
+    return QRect(left, top, right - left, bottom - top)
+
+
+_BIKE_CROP_CACHE: dict = {}
+
+
+def _cropped_bike_source(team_name: str):
+    """The raw bike cutout, cropped to its visible content once per team and
+    cached — cheap to rescale from afterwards."""
+    if team_name in _BIKE_CROP_CACHE:
+        return _BIKE_CROP_CACHE[team_name]
     img_file = _BIKE_IMAGE.get(team_name)
-    if not img_file:
+    pix = None
+    if img_file:
+        raw = QPixmap(str(_BIKES_DIR / img_file))
+        if not raw.isNull():
+            bbox = _alpha_bbox(raw)
+            pix = raw.copy(bbox) if bbox is not None else raw
+    _BIKE_CROP_CACHE[team_name] = pix
+    return pix
+
+
+def _big_bike_pixmap(team_name: str, height: int = 200):
+    """Same source image as Gallery's _bike_pixmap, cropped to its visible
+    content then scaled straight from the full-res file at a larger height —
+    Gallery's version caches a 180px-tall copy for its compact side panel, and
+    upscaling that cached copy for this page's bigger hero shot would just
+    look blurry."""
+    base = _cropped_bike_source(team_name)
+    if base is None:
         return None
-    raw = QPixmap(str(_BIKES_DIR / img_file))
-    if raw.isNull():
-        return None
-    return raw.scaledToHeight(height, Qt.TransformationMode.SmoothTransformation)
+    return base.scaledToHeight(height, Qt.TransformationMode.SmoothTransformation)
 
 try:
     from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -296,11 +337,14 @@ class _BasicInfoView(QWidget):
         outer = QVBoxLayout(self)
         # Sized to fit the stack's height even on a 150%-scaled 1080p screen
         # (~500 logical px of content room) without the scroll area this
-        # view used to have — but a plain trailing stretch left everything
-        # huddled at the top with a lot of dead space below on a roomier
-        # window. Both columns below centre their content vertically
-        # instead (leading + trailing stretch) so any surplus space splits
-        # evenly rather than pooling at the bottom.
+        # view used to have. Both columns below are bottom-anchored (leading
+        # stretch only, no trailing one) rather than centred — that pins
+        # MANUFACTURER (left) and the stat tiles (right) to the same edge, and
+        # with the bike cropped to its visible content and the gap beneath it
+        # tuned to exactly two field-row steps, its bottom (the tyres) lands
+        # level with BIKE NUMBER (two rows above MANUFACTURER). Swapping any
+        # of the fonts/spacing below out of sync with the field rows' own
+        # would throw that alignment off again — see the gap comment below.
         outer.setContentsMargins(48, 24, 48, 24)
         outer.setSpacing(0)
 
@@ -337,7 +381,6 @@ class _BasicInfoView(QWidget):
             row.addWidget(vl)
             fields_lay.addLayout(row)
             self._values[key] = vl
-        fields_lay.addStretch(1)
         body_lay.addWidget(fields_w, 1)
 
         # RIGHT column: bike image, then CAREER SUMMARY directly under it —
@@ -355,7 +398,14 @@ class _BasicInfoView(QWidget):
         self._bike_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._bike_lbl.setStyleSheet('background: transparent; border: none;')
         right_lay.addWidget(self._bike_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
-        right_lay.addSpacing(14)
+        # One field row's height+spacing is 73px (label 20 + row-gap 2 + value
+        # 36 + fields_lay spacing 15). Below the bike, CAREER SUMMARY's title
+        # (20) + spacing (10) + the stat tiles (43) already add up to 73 on
+        # their own — so this spacer adds exactly one MORE row-step (73px) to
+        # put two full steps between the (alpha-cropped, no hidden padding)
+        # bike's bottom and the stat tiles' bottom, matching the two-row gap
+        # between BIKE NUMBER and MANUFACTURER on the left.
+        right_lay.addSpacing(73)
 
         summary_title = QLabel('CAREER SUMMARY')
         summary_title.setFont(QFont('Segoe UI', 11))
@@ -369,7 +419,6 @@ class _BasicInfoView(QWidget):
         self._summary_lay = QVBoxLayout(self._summary_holder)
         self._summary_lay.setContentsMargins(0, 0, 0, 0)
         right_lay.addWidget(self._summary_holder, 0, Qt.AlignmentFlag.AlignHCenter)
-        right_lay.addStretch(1)
 
         body_lay.addWidget(right_w, 1)
 
@@ -382,7 +431,7 @@ class _BasicInfoView(QWidget):
         self._values['BIKE NUMBER'].setText(f"#{rider.get('bike_number', '—')}")
         self._values['TEAM'].setText(str(rider.get('team', '—')))
         self._values['MANUFACTURER'].setText(str(rider.get('manufacturer', '—')))
-        pix = _big_bike_pixmap(rider.get('team', ''), height=214)
+        pix = _big_bike_pixmap(rider.get('team', ''), height=236)
         self._bike_lbl.setPixmap(pix if pix is not None else QPixmap())
 
         while self._summary_lay.count():

@@ -5,7 +5,7 @@ import numpy as np
 
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QWidget,
                               QLabel, QStackedWidget, QFrame, QDialog, QSizePolicy,
-                              QSpacerItem, QGraphicsOpacityEffect)
+                              QSpacerItem, QGraphicsOpacityEffect, QHeaderView)
 from PyQt6.QtGui import (QFont, QFontMetrics, QPainter, QColor, QPixmap, QPainterPath,
                           QLinearGradient, QPen, QImage)
 from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint, QSize,
@@ -16,9 +16,11 @@ from app.pages.p_gallery import STATS, _make_scroll_area, _BIKES_DIR, _BIKE_IMAG
 from app.pages.p_calendar import _SlotBar
 from app.pages.p_home import ExitDialog
 from app.pages.p_history import (_aggregate_riders, _build_rider_race_matrix,
-                                  _stat_tiles, _TOTAL_COLS, _pos_bg,
+                                  _stat_tiles, _TOTAL_COLS, _pos_bg, _cell, _grid_cell,
+                                  _rider_race_results,
                                   _flag_pixmap, _season_tables_data, _honours_data)
-from app.widgets.table_utils import TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR, row_bg
+from app.widgets.table_utils import (TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR, row_bg,
+                                      make_table)
 from app.widgets.world_map import WorldMapWidget
 from app.wizard import SESSION_NAMES, SESSION_DAY
 from src.simulator import POINTS, WET_RACE_PROB_PCT
@@ -323,6 +325,192 @@ class _TintWrap(QWidget):
         path = QPainterPath()
         path.addRoundedRect(r, 20, 20)
         p.fillPath(path, _PANEL_TINT)
+
+
+# ── Generic focus-then-open sub-hub ────────────────────────────────────────────
+# Factored out of what used to be three copies of the same pattern (Your
+# Profile; Season Info's own Standings/Calendar picker; and now Standings'
+# own Riders/Teams/Manufacturers picker, with Riders nesting a further
+# Basic/Details picker) — a vertical stack of tab bars pinned top-left,
+# Up/Down to move focus, Enter to open the selection full-screen behind a
+# dark tint, Escape to close it back to the tab stack.
+
+class _SideSubHub(QWidget):
+    """`entries` is a list of (label, view, needs_scroll). needs_scroll wraps
+    the view in its own outer QScrollArea (for content that can outgrow the
+    panel, e.g. a long standings list); the rest are tinted directly (either
+    a view with fixed, bounded content, or one that already manages its own
+    scrolling/navigation — see below).
+
+    Once opened, arrow keys route to whichever the focused view provides,
+    checked in this order:
+      - `handle_key(key)` — the view is itself a nested _SideSubHub (or
+        anything with the same contract); keys are forwarded wholesale, and
+        this level only closes itself when the child reports 'close'.
+      - `scroll_by(dx, dy)` — the view owns internal widgets with their own
+        scrollbars (e.g. a QTableWidget) that the wrapping QScrollArea can't
+        reach directly.
+      - `scrollbar()` — returns the QScrollBar to nudge (e.g. a view with its
+        own internal QScrollArea, like the Calendar's slot list). Deliberately
+        NOT a `scroll(dy)` method: QWidget already has a built-in
+        scroll(dx, dy, [rect]) that would match `hasattr(view, 'scroll')` and
+        silently shadow a one-argument version of the same name.
+      - otherwise the wrapping QScrollArea's own vertical bar, if this entry
+        was wrapped (needs_scroll=True)."""
+
+    def __init__(self, entries: list, sidebar_margins=(48, 40, 48, 40),
+                tint_margin: int = _TINT_MARGIN):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        labels = [e[0] for e in entries]
+        self._views = [e[1] for e in entries]
+
+        self._sidebar = _SideTabBar(labels)
+        browse_page = QWidget()
+        browse_page.setStyleSheet('background: transparent;')
+        bp_lay = QVBoxLayout(browse_page)
+        bp_lay.setContentsMargins(*sidebar_margins)
+        bp_lay.setSpacing(0)
+        bp_lay.addWidget(self._sidebar, 0,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        bp_lay.addStretch(1)
+
+        self._content = QStackedWidget()
+        self._content.setStyleSheet('background: transparent;')
+        self._content.addWidget(browse_page)                       # 0 nothing opened
+
+        self._scrolls: list = []
+        for _label, view, needs_scroll in entries:
+            if hasattr(view, 'handle_key'):
+                # A nested _SideSubHub: it paints its own tint (if any) only
+                # once ITS OWN entries are opened, and its own browse page is
+                # transparent, matching this level's browse page. Wrapping it
+                # in another _TintWrap here would darken/overlay its tab bar
+                # even while it's just showing a picker (nothing "opened"
+                # yet) and offset its tab bar from where this one sits — so
+                # it's added directly, no wrap, no extra margin, no tint.
+                self._scrolls.append(None)
+                self._content.addWidget(view)
+                continue
+            if needs_scroll:
+                sc = _make_scroll_area()
+                sc.setWidget(view)
+                self._scrolls.append(sc)
+                self._content.addWidget(_TintWrap(sc, margin=tint_margin, full_bleed=True))
+            else:
+                self._scrolls.append(None)
+                self._content.addWidget(_TintWrap(view, margin=tint_margin, full_bleed=True))
+
+        outer.addWidget(self._content, 1)
+
+        self._focus = 0
+        self._opened = False
+
+    def is_opened(self) -> bool:
+        """True while a TINTED sub-view is actually showing (not a tab bar —
+        this level's own, or, recursing, a nested sub-hub's) — a parent hub
+        (or the wizard page's gap filler) uses this to keep a matching tint
+        on whatever's below/around this widget. Merely having stepped into a
+        nested sub-hub's OWN tab-bar picker doesn't count: that picker has no
+        tint of its own (see __init__), so reporting True there would tint
+        the gap while the visible content stays untinted."""
+        if not self._opened:
+            return False
+        view = self._views[self._focus]
+        if hasattr(view, 'is_opened'):
+            return view.is_opened()
+        return True
+
+    def reset(self):
+        """Always resume on the tab bar, nothing opened — recurses into any
+        nested sub-hub entry so it forgets its own last-viewed state too."""
+        self._focus = 0
+        self._opened = False
+        self._sync_focus()
+        self._content.setCurrentIndex(0)
+        for view, sc in zip(self._views, self._scrolls):
+            if hasattr(view, 'reset'):
+                view.reset()
+            if sc is not None:
+                bar = sc.verticalScrollBar()
+                if bar is not None:
+                    bar.setValue(0)
+
+    def _sync_focus(self):
+        for i, c in enumerate(self._sidebar.cards()):
+            c.set_focused(i == self._focus)
+
+    def handle_key(self, key: int):
+        """Returns 'close' when the caller should return to its own tab bar
+        (or bubble further up, if the caller has none); 'scroll' when the key
+        panned an opened view's content rather than moving a tab focus — the
+        wizard's 'navigate' click is only meant for the latter, so a caller
+        that gets 'scroll' back should suppress it (see SeasonHubPage)."""
+        K = Qt.Key
+        n = len(self._views)
+        if not self._opened:
+            if key in (K.Key_Up, K.Key_Down):
+                self._focus = (self._focus + (1 if key == K.Key_Down else -1)) % n
+                self._sync_focus()
+            elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+                self._opened = True
+                self._content.setCurrentIndex(self._focus + 1)
+            elif key in (K.Key_Escape, K.Key_Backspace):
+                return 'close'
+            return None
+
+        view = self._views[self._focus]
+        if hasattr(view, 'handle_key'):
+            result = view.handle_key(key)
+            if result == 'close':
+                self._opened = False
+                self._content.setCurrentIndex(0)
+                return None
+            return result   # propagate 'scroll' (or None) from the nested hub
+
+        if key in (K.Key_Escape, K.Key_Backspace):
+            self._opened = False
+            self._content.setCurrentIndex(0)
+            return None
+        if key in (K.Key_Up, K.Key_Down, K.Key_Left, K.Key_Right):
+            dx = (-27 if key == K.Key_Left else 27 if key == K.Key_Right else 0)
+            dy = (-60 if key == K.Key_Up else 60 if key == K.Key_Down else 0)
+            sc = self._scrolls[self._focus]
+            # Horizontal panning (e.g. a wide race-by-race grid's R1…Rn
+            # columns) only ever makes sense through the view's OWN internal
+            # widget — the wrapping QScrollArea's horizontal bar is disabled
+            # (see _make_scroll_area) — so scroll_by always gets first go at dx.
+            if dx and hasattr(view, 'scroll_by'):
+                view.scroll_by(dx, 0)
+            # Vertical panning of an entry that was wrapped in its own outer
+            # QScrollArea (needs_scroll=True) must go through THAT bar, not
+            # view.scroll_by(0, dy): a view like the race-by-race grid fixes
+            # its own table height to fit every row with no scrollbar of its
+            # own (see _build_riders_detail_table) precisely so the OUTER
+            # QScrollArea is what has room to move — routing dy into the
+            # table's own (zero-range) bar instead silently ate every Up/Down
+            # press once the grid grew past one screen.
+            if dy:
+                if sc is not None:
+                    bar = sc.verticalScrollBar()
+                    if bar is not None:
+                        bar.setValue(bar.value() + dy)
+                elif hasattr(view, 'scroll_by'):
+                    view.scroll_by(0, dy)
+                elif hasattr(view, 'scrollbar'):
+                    # NOTE: not `hasattr(view, 'scroll')` — every QWidget
+                    # already has a built-in scroll(dx, dy, [rect]) that would
+                    # match here and silently shadow a view's own single-
+                    # argument scroll(); `scrollbar()` has no such collision.
+                    bar = view.scrollbar()
+                    if bar is not None:
+                        bar.setValue(bar.value() + dy)
+            return 'scroll'
+        return None
 
 
 # ── Your Profile: Basic Info ───────────────────────────────────────────────────
@@ -733,7 +921,10 @@ class _ProfileScreen(QWidget):
             c.set_focused(i == self._focus)
 
     def handle_key(self, key: int):
-        """Returns 'close' when the caller should return to the main hub."""
+        """Returns 'close' when the caller should return to the main hub;
+        'scroll' when the key panned the opened view's content rather than
+        moving a tab focus — see _SideSubHub.handle_key for why that
+        distinction matters to the caller."""
         K = Qt.Key
         if not self._opened:
             if key in (K.Key_Up, K.Key_Down):     # vertical stack of tab bars
@@ -749,20 +940,31 @@ class _ProfileScreen(QWidget):
         if key in (K.Key_Escape, K.Key_Backspace):
             self._opened = False
             self._content.setCurrentIndex(0)
-        elif key in (K.Key_Up, K.Key_Down, K.Key_Left, K.Key_Right):
+            return None
+        if key in (K.Key_Up, K.Key_Down, K.Key_Left, K.Key_Right):
             dx = (-27 if key == K.Key_Left else 27 if key == K.Key_Right else 0)
             dy = (-60 if key == K.Key_Up else 60 if key == K.Key_Down else 0)
             view = (self._basic, self._results, self._rating)[self._focus]
-            if hasattr(view, 'scroll_by'):
-                # Results: pan the race-by-race table (its own scrollbars — see
-                # _ResultsView.scroll_by), horizontally across R1…Rn too.
-                view.scroll_by(dx, dy)
-            elif dy:
-                sc = self._scrolls[self._focus]
+            sc = self._scrolls[self._focus]
+            # Results: pan the race-by-race table horizontally across R1…Rn
+            # through its OWN scrollbars (_ResultsView.scroll_by) — the
+            # wrapping QScrollArea's horizontal bar is disabled (see
+            # _make_scroll_area). Vertical panning, though, must go through
+            # THAT wrapping QScrollArea, not scroll_by(0, dy): the table
+            # fixes its own height to fit every season with no vertical
+            # scrollbar of its own (_build_rider_race_matrix), so routing dy
+            # into it was silently swallowing every Up/Down press once a
+            # career grew past one screen of seasons.
+            if dx and hasattr(view, 'scroll_by'):
+                view.scroll_by(dx, 0)
+            if dy:
                 if sc is not None:
                     bar = sc.verticalScrollBar()
                     if bar is not None:
                         bar.setValue(bar.value() + dy)
+                elif hasattr(view, 'scroll_by'):
+                    view.scroll_by(0, dy)
+            return 'scroll'
         return None
 
 
@@ -2600,22 +2802,26 @@ class _HubDashboard(QWidget):
         QTimer.singleShot(0, self._sync_upcoming_height)
 
 
-# ── Season Info tab: STANDINGS / CALENDAR (same sub-hub pattern as Your
-# Profile) — unlike the dashboard's condensed Standings panel (5 rows around
-# the player), the full-page Standings view here lists every rider.
+# ── Season Info tab: STANDINGS (Riders/Teams/Manufacturers) / CALENDAR ────────
+# (same sub-hub pattern as Your Profile) — unlike the dashboard's condensed
+# Standings panel (5 rows around the player), the full-page views here list
+# every rider/team/manufacturer.
 
-class _FullStandingsView(QWidget):
-    def __init__(self):
+class _StandingsListView(QWidget):
+    """Pos / Name / Points list — shared by Riders (BASIC), Teams, and
+    Manufacturers, each supplying its own per-row colour lookup."""
+
+    def __init__(self, title: str):
         super().__init__()
         self.setStyleSheet('background: transparent;')
         outer = QVBoxLayout(self)
         outer.setContentsMargins(56, 52, 56, 48)
         outer.setSpacing(0)
 
-        title = QLabel('STANDINGS')
-        title.setFont(QFont('Segoe UI', 26, QFont.Weight.Bold))
-        title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
-        outer.addWidget(title)
+        title_lbl = QLabel(title)
+        title_lbl.setFont(QFont('Segoe UI', 26, QFont.Weight.Bold))
+        title_lbl.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
+        outer.addWidget(title_lbl)
         outer.addSpacing(20)
 
         self._rows_holder = QWidget()
@@ -2626,16 +2832,14 @@ class _FullStandingsView(QWidget):
         self._rows_lay.addStretch(1)
         outer.addWidget(self._rows_holder)
 
-    def load(self, standings: list, rider_name: str):
+    def load(self, rows: list, color_fn):
         while self._rows_lay.count() > 1:
             item = self._rows_lay.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.setParent(None)
-        for i, s in enumerate(standings, start=1):
-            team_color = TEAM_COLOR.get(s.get('team', '')) or MANU_COLOR.get(
-                s.get('manufacturer', ''), _DEFAULT_COLOR)
-            bg = row_bg(team_color)
+        for i, s in enumerate(rows, start=1):
+            bg = row_bg(color_fn(s))
             row = QFrame()
             row.setStyleSheet(f'background: {bg.name()}; border-radius: 6px; border: none;')
             rl = QHBoxLayout(row)
@@ -2652,122 +2856,170 @@ class _FullStandingsView(QWidget):
             rl.addWidget(name_lbl, 1)
             rl.addWidget(pts_lbl)
             self._rows_lay.insertWidget(self._rows_lay.count() - 1, row)
-        if not standings:
+        if not rows:
             ph = QLabel('No standings yet — check back after your first season.')
             ph.setFont(QFont('Segoe UI', 11))
             ph.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
             self._rows_lay.insertWidget(self._rows_lay.count() - 1, ph)
 
 
-class _SeasonInfoScreen(QWidget):
-    """Same focus-then-open sub-hub as Your Profile: a vertical stack of tab
-    bars pinned top-left (STANDINGS / CALENDAR), Enter opens the selection
-    full-screen behind a dark tint, Escape closes it back to the tab stack."""
+def _build_riders_detail_table(standings: list, rounds_detail: list):
+    """Wiki-style race-by-race grid for the CURRENT season's riders, ordered
+    by the standings passed in — POS / RIDER / R1…Rn (coloured by finishing
+    position, 'Ret' for DNF) / PTS. Mirrors championship mode's own Results
+    grid (p4_championship._fill_results) and career's cross-season race
+    matrix (_build_rider_race_matrix), but scoped to just this season.
 
-    SUB_TABS = ['STANDINGS', 'CALENDAR']
+    Only the R1…Rn cells carry the per-position colour coding — POS/RIDER/PTS
+    stay on the plain neutral background (no team/manufacturer tint), same
+    as YEAR/BIKE in _build_rider_race_matrix."""
+    per_rider = [(s, _rider_race_results(str(s.get('name', '')), rounds_detail))
+                for s in standings]
+    max_races = max((len(r) for _, r in per_rider if r is not None), default=0)
+    race0 = 2                              # POS, RIDER, then R1…Rn
+    pts_col = race0 + max_races
+    headers = ['POS', 'RIDER'] + [f'R{i + 1}' for i in range(max_races)] + ['PTS']
+    t = make_table(headers)
+    t.setRowCount(len(per_rider))
+    neutral = row_bg(_DEFAULT_COLOR)
+
+    for i, (s, results) in enumerate(per_rider):
+        t.setItem(i, 0, _cell(i + 1, neutral, bold=True, center=True, size=11))
+        t.setItem(i, 1, _cell(str(s.get('name', '')).upper(), neutral, bold=True, size=11))
+        for c in range(max_races):
+            r = results[c] if (results is not None and c < len(results)) else None
+            if r is None:
+                t.setItem(i, race0 + c, _grid_cell('', neutral))
+            else:
+                txt = 'Ret' if r['dnf'] else str(r['pos'])
+                t.setItem(i, race0 + c, _grid_cell(txt, _pos_bg(r['pos'], r['dnf'])))
+        t.setItem(i, pts_col, _cell(int(s.get('points', 0)), neutral, bold=True, center=True, size=11))
+
+    t.setColumnWidth(0, 56)
+    t.setColumnWidth(1, 190)
+    for c in range(max_races):
+        t.setColumnWidth(race0 + c, 54)
+    t.setColumnWidth(pts_col, 70)
+    t.horizontalHeader().setStretchLastSection(False)
+    t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    t.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    for c in range(pts_col + 1):
+        hdr = t.horizontalHeaderItem(c)
+        if hdr is not None:
+            hdr.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    # Same reasoning as _build_rider_race_matrix: fix the height to fit every
+    # rider with no vertical scrollbar of its own — the page's own scroll
+    # area (or the wrapping QScrollArea's bar, driven via scroll_by below)
+    # takes over once there's genuinely too much content for the screen.
+    t.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    t.setFixedHeight(t.horizontalHeader().sizeHint().height() + t.verticalHeader().length()
+                     + 2 * t.frameWidth())
+    return t
+
+
+class _RidersDetailView(QWidget):
+    """Riders Standings — DETAILS: race-by-race finishing order, championship-
+    mode style (contrast BASIC's plain Pos/Name/Points list)."""
 
     def __init__(self):
         super().__init__()
         self.setStyleSheet('background: transparent;')
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(12, 44, 12, 40)
+        self._lay.setSpacing(0)
 
-        self._standings_view = _FullStandingsView()
+        title = QLabel('RIDERS — RACE BY RACE')
+        title.setFont(QFont('Segoe UI', 22, QFont.Weight.Bold))
+        title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
+        self._lay.addWidget(title)
+        self._lay.addSpacing(22)
+        self._lay.addStretch(1)
+        self._body = None
+
+    def load(self, standings: list, rounds_detail: list | None):
+        if self._body is not None:
+            self._lay.removeWidget(self._body)
+            self._body.deleteLater()
+            self._body = None
+        if standings:
+            self._body = _build_riders_detail_table(standings, rounds_detail or [])
+        else:
+            note = QLabel('No standings yet — check back after your first season.')
+            note.setWordWrap(True)
+            note.setFont(QFont('Segoe UI', 14))
+            note.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
+            self._body = note
+        self._lay.insertWidget(self._lay.count() - 1, self._body)
+
+    def scroll_by(self, dx: int, dy: int):
+        """Pan the race-by-race grid with the arrow keys — same rationale as
+        _ResultsView.scroll_by (career Results, in Your Profile): the table
+        owns its own scrollbars, the wrapping QScrollArea can't drive them."""
+        body = self._body
+        hbar = getattr(body, 'horizontalScrollBar', None)
+        vbar = getattr(body, 'verticalScrollBar', None)
+        if dx and callable(hbar):
+            bar = hbar(); bar.setValue(bar.value() + dx)
+        if dy and callable(vbar):
+            bar = vbar(); bar.setValue(bar.value() + dy)
+
+
+class _RidersStandingsScreen(_SideSubHub):
+    """RIDERS entry within Standings: BASIC (Pos/Name/Points) or DETAILS
+    (race-by-race grid) — one further focus-then-open level nested inside
+    _StandingsScreen, itself nested inside _SeasonInfoScreen."""
+
+    def __init__(self, basic_view: _StandingsListView, detail_view: _RidersDetailView):
+        super().__init__([('BASIC', basic_view, True), ('DETAILS', detail_view, True)],
+                         tint_margin=16)
+
+
+class _StandingsScreen(_SideSubHub):
+    """STANDINGS entry within Season Info: RIDERS (its own BASIC/DETAILS
+    picker), TEAMS, and MANUFACTURERS."""
+
+    def __init__(self):
+        self._riders_basic = _StandingsListView('RIDERS')
+        self._riders_detail = _RidersDetailView()
+        self._riders = _RidersStandingsScreen(self._riders_basic, self._riders_detail)
+        self._teams = _StandingsListView('TEAMS')
+        self._manu = _StandingsListView('MANUFACTURERS')
+        super().__init__([
+            ('RIDERS', self._riders, False),
+            ('TEAMS', self._teams, True),
+            ('MANUFACTURERS', self._manu, True),
+        ], tint_margin=24)
+
+    def load(self, riders: list, teams: list, manu: list, rounds_detail: list | None):
+        self._riders_basic.load(riders, lambda s: TEAM_COLOR.get(str(s.get('team', '')))
+                                 or MANU_COLOR.get(str(s.get('manufacturer', '')), _DEFAULT_COLOR))
+        self._riders_detail.load(riders, rounds_detail)
+        self._teams.load(teams, lambda s: TEAM_COLOR.get(str(s.get('name', '')), _DEFAULT_COLOR))
+        self._manu.load(manu, lambda s: MANU_COLOR.get(str(s.get('name', '')), _DEFAULT_COLOR))
+
+
+class _SeasonInfoScreen(_SideSubHub):
+    """Same focus-then-open sub-hub as Your Profile: a vertical stack of tab
+    bars pinned top-left (STANDINGS / CALENDAR), Enter opens the selection
+    full-screen behind a dark tint, Escape closes it back to the tab stack.
+    STANDINGS itself opens a further Riders/Teams/Manufacturers picker."""
+
+    def __init__(self):
+        self._standings = _StandingsScreen()
         self._calendar_view = _CalendarView()
+        super().__init__([
+            ('STANDINGS', self._standings, False),
+            ('CALENDAR', self._calendar_view, False),
+        ])
 
-        self._content = QStackedWidget()
-        self._content.setStyleSheet('background: transparent;')
-        self._sidebar = _SideTabBar(self.SUB_TABS)
-        browse_page = QWidget()
-        browse_page.setStyleSheet('background: transparent;')
-        bp_lay = QVBoxLayout(browse_page)
-        bp_lay.setContentsMargins(48, 40, 48, 40)
-        bp_lay.setSpacing(0)
-        bp_lay.addWidget(self._sidebar, 0,
-                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        bp_lay.addStretch(1)
-        self._content.addWidget(browse_page)                       # 0 nothing opened
-
-        # Standings can outgrow the panel (a big grid) so it gets wrapped in
-        # its own outer scroll area; Calendar already scrolls its slot list
-        # internally (see _CalendarView), so it's tinted directly instead —
-        # same split Your Profile makes between Results and Basic Info/Rating.
-        self._scrolls: list = []
-        for view, needs_scroll in ((self._standings_view, True),
-                                   (self._calendar_view, False)):
-            if needs_scroll:
-                sc = _make_scroll_area()
-                sc.setWidget(view)
-                self._scrolls.append(sc)
-                self._content.addWidget(_TintWrap(sc, full_bleed=True))   # 1
-            else:
-                self._scrolls.append(None)
-                self._content.addWidget(_TintWrap(view, full_bleed=True))  # 2
-
-        outer.addWidget(self._content, 1)
-
-        self._focus = 0
-        self._opened = False
-
-    def is_opened(self) -> bool:
-        """True while a sub-view is showing full-bleed (not the tab bar) — the
-        hub uses this to tint the reserved bottom strip to match."""
-        return self._opened
-
-    def load(self, standings: list, rider_name: str, season_df):
-        self._standings_view.load(standings, rider_name)
+    def load(self, riders: list, teams: list, manu: list, season_df,
+            rounds_detail: list | None):
+        self._standings.load(riders, teams, manu, rounds_detail)
         self._calendar_view.load(season_df)
         bar = self._calendar_view.scrollbar()
         if bar is not None:
             bar.setValue(0)
-
-    def reset(self):
-        """Always resume on the tab bar, nothing opened."""
-        self._focus = 0
-        self._opened = False
-        self._sync_focus()
-        self._content.setCurrentIndex(0)
-        for sc in self._scrolls:
-            if sc is not None:
-                bar = sc.verticalScrollBar()
-                if bar is not None:
-                    bar.setValue(0)
-        bar = self._calendar_view.scrollbar()
-        if bar is not None:
-            bar.setValue(0)
-
-    def _sync_focus(self):
-        for i, c in enumerate(self._sidebar.cards()):
-            c.set_focused(i == self._focus)
-
-    def handle_key(self, key: int):
-        """Returns 'close' when the caller should return to the main hub."""
-        K = Qt.Key
-        if not self._opened:
-            if key in (K.Key_Up, K.Key_Down):     # vertical stack of tab bars
-                self._focus = (self._focus + (1 if key == K.Key_Down else -1)) % 2
-                self._sync_focus()
-            elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
-                self._opened = True
-                self._content.setCurrentIndex(self._focus + 1)
-            elif key in (K.Key_Escape, K.Key_Backspace):
-                return 'close'
-            return None
-
-        if key in (K.Key_Escape, K.Key_Backspace):
-            self._opened = False
-            self._content.setCurrentIndex(0)
-        elif key in (K.Key_Up, K.Key_Down):
-            dy = -60 if key == K.Key_Up else 60
-            sc = self._scrolls[self._focus]
-            if sc is not None:
-                bar = sc.verticalScrollBar()
-                if bar is not None:
-                    bar.setValue(bar.value() + dy)
-            else:
-                self._calendar_view.scroll(dy)
-        return None
 
 
 # ── Between-GP map transition ─────────────────────────────────────────────────
@@ -3218,7 +3470,8 @@ class SeasonHubPage(QWizardPage):
                                  gp_result=gp_result,
                                  result_title=result_title,
                                  champion=champion)
-        self._season_info.load(standings, name or '', self._wiz.season_df)
+        self._season_info.load(standings, team_standings, manu_standings,
+                               self._wiz.season_df, current_rounds_detail)
 
     def initializePage(self):
         # Fresh arrival from Calendar: begin the weekend at the first session.
@@ -3339,6 +3592,10 @@ class SeasonHubPage(QWizardPage):
                 gap.update()
             if result == 'close':
                 self._stack.setCurrentIndex(1)
+            elif result == 'scroll':
+                # A content scroll, not a tab-focus move — the wizard would
+                # otherwise play its 'navigate' click for every arrow key.
+                self._wiz.suppress_next_sfx = True
             return True
 
         if idx == 3:                                       # Season Info owns its own sub-nav
@@ -3348,6 +3605,8 @@ class SeasonHubPage(QWizardPage):
                 gap.update()
             if result == 'close':
                 self._stack.setCurrentIndex(1)
+            elif result == 'scroll':
+                self._wiz.suppress_next_sfx = True
             return True
 
         return True

@@ -329,24 +329,30 @@ class _TintWrap(QWidget):
 
 # ── Generic focus-then-open sub-hub ────────────────────────────────────────────
 # Factored out of what used to be three copies of the same pattern (Your
-# Profile; Season Info's own Standings/Calendar picker; and now Standings'
-# own Riders/Teams/Manufacturers picker, with Riders nesting a further
-# Basic/Details picker) — a vertical stack of tab bars pinned top-left,
-# Up/Down to move focus, Enter to open the selection full-screen behind a
-# dark tint, Escape to close it back to the tab stack.
+# Profile; Season Info's own Standings/Calendar picker; Standings' own
+# Riders/Teams/Manufacturers picker) — a vertical stack of tab bars pinned
+# top-left, Up/Down to move focus, Enter to open the selection full-screen
+# behind a dark tint, Escape to close it back to the tab stack.
+#
+# `cycle=True` swaps that browse-then-open model for a plain toggle (used by
+# Riders' own Basic/Details, championship-mode style): there's no tab bar and
+# no unopened state — it starts right on the first entry, and Enter steps to
+# the next one in place instead of returning to a picker first.
 
 class _SideSubHub(QWidget):
     """`entries` is a list of (label, view, needs_scroll). needs_scroll wraps
     the view in its own outer QScrollArea (for content that can outgrow the
     panel, e.g. a long standings list); the rest are tinted directly (either
     a view with fixed, bounded content, or one that already manages its own
-    scrolling/navigation — see below).
+    scrolling/navigation — see below). `label` is unused when cycle=True.
 
-    Once opened, arrow keys route to whichever the focused view provides,
-    checked in this order:
+    Once opened (always true in cycle mode), arrow keys route to whichever
+    the focused view provides, checked in this order:
       - `handle_key(key)` — the view is itself a nested _SideSubHub (or
         anything with the same contract); keys are forwarded wholesale, and
-        this level only closes itself when the child reports 'close'.
+        this level only closes itself when the child reports 'close' (unless
+        this level is itself cycle-mode, with no tab bar to fall back to —
+        then 'close' is passed straight on up instead).
       - `scroll_by(dx, dy)` — the view owns internal widgets with their own
         scrollbars (e.g. a QTableWidget) that the wrapping QScrollArea can't
         reach directly.
@@ -359,29 +365,36 @@ class _SideSubHub(QWidget):
         was wrapped (needs_scroll=True)."""
 
     def __init__(self, entries: list, sidebar_margins=(48, 40, 48, 40),
-                tint_margin: int = _TINT_MARGIN):
+                tint_margin: int = _TINT_MARGIN, cycle: bool = False):
         super().__init__()
         self.setStyleSheet('background: transparent;')
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        self._cycle = cycle
+        # Non-cycle mode reserves content index 0 for the browse page (tab
+        # bar), so entry i's wrap lives at index i+1; cycle mode has no
+        # browse page, so entry i's wrap lives at index i directly.
+        self._offset = 0 if cycle else 1
         labels = [e[0] for e in entries]
         self._views = [e[1] for e in entries]
 
-        self._sidebar = _SideTabBar(labels)
-        browse_page = QWidget()
-        browse_page.setStyleSheet('background: transparent;')
-        bp_lay = QVBoxLayout(browse_page)
-        bp_lay.setContentsMargins(*sidebar_margins)
-        bp_lay.setSpacing(0)
-        bp_lay.addWidget(self._sidebar, 0,
-                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        bp_lay.addStretch(1)
-
         self._content = QStackedWidget()
         self._content.setStyleSheet('background: transparent;')
-        self._content.addWidget(browse_page)                       # 0 nothing opened
+
+        self._sidebar = None
+        if not cycle:
+            self._sidebar = _SideTabBar(labels)
+            browse_page = QWidget()
+            browse_page.setStyleSheet('background: transparent;')
+            bp_lay = QVBoxLayout(browse_page)
+            bp_lay.setContentsMargins(*sidebar_margins)
+            bp_lay.setSpacing(0)
+            bp_lay.addWidget(self._sidebar, 0,
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            bp_lay.addStretch(1)
+            self._content.addWidget(browse_page)                   # 0 nothing opened
 
         self._scrolls: list = []
         for _label, view, needs_scroll in entries:
@@ -408,7 +421,9 @@ class _SideSubHub(QWidget):
         outer.addWidget(self._content, 1)
 
         self._focus = 0
-        self._opened = False
+        self._opened = cycle          # cycle mode has no browse state to start on
+        if cycle:
+            self._content.setCurrentIndex(0)
 
     def is_opened(self) -> bool:
         """True while a TINTED sub-view is actually showing (not a tab bar —
@@ -426,11 +441,13 @@ class _SideSubHub(QWidget):
         return True
 
     def reset(self):
-        """Always resume on the tab bar, nothing opened — recurses into any
-        nested sub-hub entry so it forgets its own last-viewed state too."""
+        """Always resume on the tab bar with nothing opened (or, in cycle
+        mode, back on the first entry) — recurses into any nested sub-hub
+        entry so it forgets its own last-viewed state too."""
         self._focus = 0
-        self._opened = False
-        self._sync_focus()
+        self._opened = self._cycle
+        if self._sidebar is not None:
+            self._sync_focus()
         self._content.setCurrentIndex(0)
         for view, sc in zip(self._views, self._scrolls):
             if hasattr(view, 'reset'):
@@ -446,10 +463,11 @@ class _SideSubHub(QWidget):
 
     def handle_key(self, key: int):
         """Returns 'close' when the caller should return to its own tab bar
-        (or bubble further up, if the caller has none); 'scroll' when the key
-        panned an opened view's content rather than moving a tab focus — the
-        wizard's 'navigate' click is only meant for the latter, so a caller
-        that gets 'scroll' back should suppress it (see SeasonHubPage)."""
+        (or bubble further up, if the caller has none, or if this level is
+        itself cycle-mode); 'scroll' when the key panned an opened view's
+        content rather than moving a tab focus — the wizard's 'navigate'
+        click is only meant for the latter, so a caller that gets 'scroll'
+        back should suppress it (see SeasonHubPage)."""
         K = Qt.Key
         n = len(self._views)
         if not self._opened:
@@ -458,7 +476,7 @@ class _SideSubHub(QWidget):
                 self._sync_focus()
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
                 self._opened = True
-                self._content.setCurrentIndex(self._focus + 1)
+                self._content.setCurrentIndex(self._focus + self._offset)
             elif key in (K.Key_Escape, K.Key_Backspace):
                 return 'close'
             return None
@@ -467,14 +485,25 @@ class _SideSubHub(QWidget):
         if hasattr(view, 'handle_key'):
             result = view.handle_key(key)
             if result == 'close':
+                if self._cycle:
+                    return 'close'   # no tab bar of our own to fall back to
                 self._opened = False
                 self._content.setCurrentIndex(0)
                 return None
             return result   # propagate 'scroll' (or None) from the nested hub
 
         if key in (K.Key_Escape, K.Key_Backspace):
+            if self._cycle:
+                return 'close'
             self._opened = False
             self._content.setCurrentIndex(0)
+            return None
+        if self._cycle and key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+            # Championship-mode style: Enter steps to the next entry in
+            # place (Basic -> Details -> Basic -> …) instead of opening one
+            # from a picker — there's no picker here to open one from.
+            self._focus = (self._focus + 1) % n
+            self._content.setCurrentIndex(self._focus)
             return None
         if key in (K.Key_Up, K.Key_Down, K.Key_Left, K.Key_Right):
             dx = (-27 if key == K.Key_Left else 27 if key == K.Key_Right else 0)
@@ -2966,18 +2995,49 @@ class _RidersDetailView(QWidget):
 
 
 class _RidersStandingsScreen(_SideSubHub):
-    """RIDERS entry within Standings: BASIC (Pos/Name/Points) or DETAILS
-    (race-by-race grid) — one further focus-then-open level nested inside
-    _StandingsScreen, itself nested inside _SeasonInfoScreen."""
+    """RIDERS entry within Standings: BASIC (Pos/Name/Points) and DETAILS
+    (race-by-race grid), championship-mode style — no picker step, Enter
+    toggles straight between the two (and back), Escape bubbles straight up
+    to _StandingsScreen's own RIDERS/TEAMS/MANUFACTURERS tab bar.
+
+    A footer pinned to the very bottom of the SCREEN (not the bottom of
+    whichever list/grid happens to be showing — that would scroll out of
+    view once the content overflows one screen) advertises the Enter-to-
+    toggle control, swapping its wording between BASIC and DETAILS."""
+
+    _HINTS = ['Press Enter to see details',
+             'Press Enter to see the shortened version']
 
     def __init__(self, basic_view: _StandingsListView, detail_view: _RidersDetailView):
         super().__init__([('BASIC', basic_view, True), ('DETAILS', detail_view, True)],
-                         tint_margin=16)
+                         tint_margin=16, cycle=True)
+
+        self._footer = QLabel()
+        self._footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._footer.setFont(QFont('Segoe UI', 10))
+        self._footer.setStyleSheet(
+            'color:#c8c8d8; letter-spacing:1px; border:none; padding:10px 0;'
+            f'background: rgba({_PANEL_TINT.red()}, {_PANEL_TINT.green()}, '
+            f'{_PANEL_TINT.blue()}, {_PANEL_TINT.alpha()});')
+        self.layout().addWidget(self._footer)
+        self._sync_footer()
+
+    def _sync_footer(self):
+        self._footer.setText(self._HINTS[self._focus])
+
+    def reset(self):
+        super().reset()
+        self._sync_footer()
+
+    def handle_key(self, key: int):
+        result = super().handle_key(key)
+        self._sync_footer()
+        return result
 
 
 class _StandingsScreen(_SideSubHub):
     """STANDINGS entry within Season Info: RIDERS (its own BASIC/DETAILS
-    picker), TEAMS, and MANUFACTURERS."""
+    Enter-toggle), TEAMS, and MANUFACTURERS."""
 
     def __init__(self):
         self._riders_basic = _StandingsListView('RIDERS')

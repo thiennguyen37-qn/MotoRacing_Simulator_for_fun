@@ -194,13 +194,18 @@ class ProgressionPanel(QDialog):
 
     _META = {name: (label, color) for name, label, color in STATS}
 
-    def __init__(self, parent, race_num, position, xp, growth: dict):
+    def __init__(self, parent, race_num, position, xp, growth: dict, is_wet=False):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(560, 420)
+        # A wet race adds a sixth bar (wet_performance), so size to the bar count.
+        bar_order = [s for s in progression.GROWTH_STATS if s in growth]
+        if 'wet_performance' in growth:
+            bar_order.append('wet_performance')
+        height = 180 + len(bar_order) * 48
+        self.setFixedSize(560, height)
         geo = QApplication.primaryScreen().availableGeometry()
-        self.move(geo.center().x() - 280, geo.center().y() - 210)
+        self.move(geo.center().x() - 280, geo.center().y() - height // 2)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -215,7 +220,8 @@ class ProgressionPanel(QDialog):
         cl.setSpacing(10)
 
         pos_text = 'DNF' if position is None else f'P{position}'
-        title = QLabel(f'RACE {race_num} RESULT  ·  {pos_text}')
+        weather = '  ·  WET 🌧' if is_wet else ''
+        title = QLabel(f'RACE {race_num} RESULT  ·  {pos_text}{weather}')
         title.setFont(QFont('Segoe UI', 16, QFont.Weight.Bold))
         title.setStyleSheet('letter-spacing: 1px;')
         cl.addWidget(title)
@@ -227,7 +233,7 @@ class ProgressionPanel(QDialog):
         cl.addSpacing(14)
 
         self._bars = []
-        for stat in progression.GROWTH_STATS:
+        for stat in bar_order:
             label, color = self._META[stat]
             old, new, _delta = growth[stat]
             bar = _GrowthBar(label, color, old, new)
@@ -505,11 +511,12 @@ class RacePage(QWizardPage):
                 self._career_session_done = True
             self.completeChanged.emit()
         if career:
-            self._show_progression(race_num, result_df)
+            self._show_progression(race_num, result_df, meta)
 
-    def _show_progression(self, race_num, result_df):
+    def _show_progression(self, race_num, result_df, meta):
         """Career only: award this race's XP to the custom rider and show the
-        stat-growth panel — see src/progression.py for the formula."""
+        stat-growth panel — see src/progression.py for the formula. A wet race
+        additionally boosts wet_performance."""
         wiz = self._wiz
         rider = wiz.load_career_rider()
         if not rider:
@@ -519,12 +526,14 @@ class RacePage(QWizardPage):
             return
         row = row.iloc[0]
         position = None if bool(row['dnf']) else int(row['pos'])
-        xp = progression.xp_for_race(position, wiz.years_racing())
-        growth = progression.apply_growth(rider, xp)
+        year = wiz.years_racing()
+        xp = progression.xp_for_race(position, year)
+        wet_bonus = progression.wet_perf_bonus(position, year) if meta['is_wet'] else 0.0
+        growth = progression.apply_growth(rider, xp, wet_bonus)
         wiz.save_career_rider(rider)
-        for stat in progression.GROWTH_STATS:
+        for stat in growth:
             wiz.df.loc[wiz.df['name'] == rider['name'], stat] = rider[stat]
-        ProgressionPanel(self, race_num, position, xp, growth).exec()
+        ProgressionPanel(self, race_num, position, xp, growth, meta['is_wet']).exec()
 
     def isComplete(self):
         return self._both_done

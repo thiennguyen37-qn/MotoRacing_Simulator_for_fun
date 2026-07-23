@@ -361,6 +361,15 @@ class MotoWizard(QWizard):
         Hub's "TO NEXT SEASON" card."""
         self.season_complete = False
         self.season_year  += 1
+        # Career only: the custom rider ages one year per season (age is
+        # cosmetic — shown on the Season Hub profile, not used by the sim).
+        if self.mode == 'career':
+            rider = self.load_career_rider()
+            if rider is not None:
+                rider['age'] = int(rider.get('age', 0)) + 1
+                self.save_career_rider(rider)
+                if self.df is not None:
+                    self.df.loc[self.df['name'] == rider['name'], 'age'] = rider['age']
         self.circuit_index = 0
         self.all_race_pts  = []
         self.race_pts      = []

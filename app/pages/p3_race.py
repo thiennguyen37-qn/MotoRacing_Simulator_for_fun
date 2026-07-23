@@ -178,7 +178,7 @@ class _GrowthBar(QWidget):
         p.setPen(QColor('#ffffff'))
         p.drawText(QRect(w - val_w, 0, val_w - 54, h),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-                   f'{self._new:.1f}')
+                   f'{self._new:.2f}')
 
         delta = self._new - self._old
         p.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))

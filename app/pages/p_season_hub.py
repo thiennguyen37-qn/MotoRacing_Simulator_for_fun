@@ -720,7 +720,7 @@ class _ResultsView(QWidget):
 # have their label/value colours baked into paintEvent, not parameterised.
 
 class _RatingBar(QWidget):
-    def __init__(self, label: str, value: int, color_hex: str):
+    def __init__(self, label: str, value: float, color_hex: str):
         super().__init__()
         self._label = label
         self._value = value
@@ -734,7 +734,7 @@ class _RatingBar(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        label_w, val_w = 240, 60
+        label_w, val_w = 240, 84   # val_w fits a 2-decimal rating (e.g. "99.00")
         bar_x = label_w
         bar_w = w - label_w - val_w - 12
 
@@ -760,7 +760,7 @@ class _RatingBar(QWidget):
         p.setPen(QColor('#ffffff'))
         p.drawText(QRect(w - val_w, 0, val_w, h),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-                   str(self._value))
+                   f'{self._value:.2f}')
 
 
 class _RatingPowerBar(QWidget):
@@ -848,14 +848,14 @@ class _RatingView(QWidget):
             if w is not None:
                 w.setParent(None)
         for col_name, label, color in STATS:
-            self._bars_lay.addWidget(_RatingBar(label, int(rider.get(col_name, 0)), color))
+            self._bars_lay.addWidget(_RatingBar(label, float(rider.get(col_name, 0)), color))
 
         while self._power_lay.count():
             item = self._power_lay.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.setParent(None)
-        score = sum(int(rider.get(c, 0)) for c, _, _ in STATS) / len(STATS) if rider else 0.0
+        score = sum(float(rider.get(c, 0)) for c, _, _ in STATS) / len(STATS) if rider else 0.0
         self._power_lay.addWidget(_RatingPowerBar(score))
 
 

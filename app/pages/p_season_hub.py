@@ -3552,6 +3552,11 @@ class SeasonHubPage(QWizardPage):
         # session_index alone so the round continues where it paused.
         self._wiz.session_index = 0
         self._hub_focus = 0
+        # Switch to the career soundtrack BEFORE any pause/resume below, so a
+        # season-start intro pauses (and later resumes) the career track
+        # itself, never the main playlist it's replacing — a no-op every visit
+        # after the first (see MotoWizard.play_career_music).
+        self._wiz.play_career_music()
         if self._wiz.circuit_index == 0:
             # Start of a season, before Round 1: the intro clip plays first,
             # giving _refresh_data() (and the geometry-dependent layout work

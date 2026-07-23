@@ -19,10 +19,11 @@ venv/
 Thumbs.db
 desktop.ini
 
-# Music (copyrighted — keep local only; drop files into audio/music/)
-audio/music/*.mp3
-audio/music/*.ogg
-audio/music/*.wav
+# Music (copyrighted — keep local only; drop files into audio/music/, or
+# audio/music/career/ for the career-mode soundtrack)
+audio/music/**/*.mp3
+audio/music/**/*.ogg
+audio/music/**/*.wav
 
 # Player data (championship archive + mid-season save)
 data/history.json

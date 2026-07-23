@@ -256,6 +256,18 @@ class MotoWizard(QWizard):
     def resume_music(self):
         self._audio.resume_music()
 
+    def play_career_music(self):
+        """Switch to the career-only soundtrack. Called by SeasonHubPage's own
+        initializePage() (not the generic page-changed hook below) so the
+        switch always lands BEFORE that same method's own pause_music() call
+        for the season intro — calling it from currentIdChanged instead raced
+        initializePage() (which runs first) and re-started playback right on
+        top of the intro's audio the instant the pause took effect."""
+        self._audio.play_career_music()
+
+    def play_main_music(self):
+        self._audio.play_main_music()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         QTimer.singleShot(0, self._sync_gap_filler)
@@ -656,3 +668,8 @@ class MotoWizard(QWizard):
     def _on_page_changed(self, page_id):
         self.setButtonLayout([])
         QTimer.singleShot(0, self._sync_gap_filler)
+        # Back to the main soundtrack on returning home. The switch TO career
+        # music happens in SeasonHubPage.initializePage() itself instead of
+        # here — see play_career_music()'s docstring for why.
+        if page_id == self.ID_HOME:
+            self._audio.play_main_music()

@@ -299,6 +299,13 @@ class MotoWizard(QWizard):
         return bool(self.mode == 'career' and self.weekend_weather
                     and self.weekend_weather.get('is_wet'))
 
+    def years_racing(self) -> int:
+        """Career only: 1-based years-of-racing counter for the custom rider's
+        progression XP (src/progression.py) — derived from season_year rather
+        than stored separately, since season_year already increments once per
+        season (begin_next_season_setup) and START_YEAR is the rookie year."""
+        return self.season_year - START_YEAR + 1
+
     def return_to_hub_after_session(self):
         """Career only: a single weekend session just finished — advance the
         session pointer and walk history back to the Season Hub, which the hub

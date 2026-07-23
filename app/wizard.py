@@ -324,6 +324,34 @@ class MotoWizard(QWizard):
         if self.currentId() == self.ID_SEASON_HUB:
             self.currentPage().resume_at_hub()
 
+    def reset_career_progress(self):
+        """A brand-new custom rider (CareerPage._confirm_new_rider) starts a
+        career from scratch — including when overwriting an occupied slot.
+        Without this, the wizard-level season-tracking fields (all in-memory,
+        shared across every career slot) keep whatever a previous slot's
+        in-progress career left them at, so the new rider's Season Hub would
+        show that old career's standings/podiums/recent-form until a round
+        was actually played. Mirrors begin_next_season_setup's resets, plus
+        the fields that method leaves alone because a continuing career keeps
+        them (season_year, session_index, weekend_weather, circuit/session
+        state)."""
+        self.season_year    = START_YEAR
+        self.season_complete = False
+        self.season_df      = None
+        self.circuit_index  = 0
+        self.all_race_pts   = []
+        self.race_pts       = []
+        self.race_results   = []
+        self.race_fastest_laps = []
+        self.round_results  = []
+        self.session_index  = 0
+        self.weekend_weather = None
+        self.gp_recap_dismissed_for = None
+        self.circuit          = None
+        self.practice_results = None
+        self.quali_result      = None
+        self.grid_all_df       = None
+
     def begin_next_season_setup(self):
         """Roll a finished season into next year's calendar setup: clear the
         season-complete flag, bump the year, wipe the finished season's running

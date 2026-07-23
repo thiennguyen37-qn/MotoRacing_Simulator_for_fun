@@ -985,6 +985,7 @@ class CareerPage(QWizardPage):
             'stability': int(bike['stability']),
         }
 
+        wiz.reset_career_progress()
         wiz.clear_season_save()
         wiz.clear_history()
         wiz.save_career_rider(rider)

@@ -697,6 +697,9 @@ class CareerPage(QWizardPage):
         if key in (K.Key_Up, K.Key_Down):
             d = -1 if key == K.Key_Up else 1
             self._move_list_focus((self._list_focus + d) % len(rows))
+            # Scrolling a value list (age/nationality/manufacturer) isn't
+            # discrete navigation — no 'navigate' SFX (see wizard.eventFilter).
+            self._wiz.suppress_next_sfx = True
             return True
         if key in (K.Key_Return, K.Key_Enter, K.Key_Space):
             self._commit_list_pick()

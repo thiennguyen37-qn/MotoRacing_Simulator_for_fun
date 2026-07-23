@@ -39,6 +39,7 @@ class PracticePage(QWizardPage):
         if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
             bar = self._table.verticalScrollBar()
             bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
+            self._wiz.suppress_next_sfx = True   # scrolling, not navigation — no SFX
             return True
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self._btn.isEnabled():

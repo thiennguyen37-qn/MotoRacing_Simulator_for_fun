@@ -68,6 +68,7 @@ class QualifyingPage(QWizardPage):
         if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
             bar = self._tabs.currentWidget().verticalScrollBar()
             bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
+            self._wiz.suppress_next_sfx = True   # scrolling, not navigation — no SFX
             return True
         if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
             step = 1 if key == Qt.Key.Key_Right else -1

@@ -264,12 +264,14 @@ class ChampionshipPage(QWizardPage):
             if key in (K.Key_Up, K.Key_Down):
                 bar = self._tabs.currentWidget().verticalScrollBar()
                 bar.setValue(bar.value() + (bar.singleStep() if key == K.Key_Down else -bar.singleStep()))
+                self._wiz.suppress_next_sfx = True   # scrolling content — no SFX
                 return True
             if key in (K.Key_Left, K.Key_Right):
                 bar = self._tabs.currentWidget().horizontalScrollBar()
                 if bar.maximum() > 0:      # wide Results grid
                     step = max(bar.singleStep(), 52)
                     bar.setValue(bar.value() + (step if key == K.Key_Right else -step))
+                self._wiz.suppress_next_sfx = True   # scrolling content — no SFX
                 return True
             if key in (K.Key_Escape, K.Key_Backspace,
                        K.Key_Return, K.Key_Enter, K.Key_Space):

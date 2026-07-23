@@ -18,8 +18,39 @@ from PyQt6.QtGui import QFont, QPixmap, QPainter
 from PyQt6.QtCore import Qt, QThread, QTimer, QRectF, QCoreApplication, pyqtSignal
 
 # Single high-res capture used by fly_to()'s pan/zoom — its figure-inches
-# width (6, see Figure(figsize=...) below) times this DPI.
-_FLY_CAPTURE_DPI = 480
+# width (6, see Figure(figsize=...) below) times a per-flight DPI (see
+# WorldMapWidget._flight_capture_dpi).
+#
+# The capture is ONE PNG spanning the whole flight's wide view; every frame
+# blits a crop of it, stretched to fill the screen with bilinear smoothing
+# (SmoothPixmapTransform, _FlyOverlay.paintEvent). The landing frame zooms in
+# the tightest, so its crop is the smallest slice of the PNG and gets upscaled
+# the most — and bilinear upscaling BLOOMS a thin border into a soft, wider
+# line that reads as noticeably heavier than the crisp vector border the live
+# canvas draws the instant highlight() takes over. That bloom (not the border
+# linewidth itself) is what made the border look thick through the zoom-in and
+# then snap thin on landing. The fix: pick the capture DPI PER FLIGHT so the
+# landing crop is rendered at roughly screen resolution — no upscaling, no
+# bloom — so the raster border hands off to the live one seamlessly.
+_FLY_DPI_MIN       = 480    # floor: near flights barely zoom in, this is already crisp
+# Ceiling: the capture's cost is ~pixels² (dominated by rasterising the two
+# flags' country-shaped clip masks — NOT the PNG encode or polygon count), so
+# it grows fast with DPI. At 1100 a capture ran ~8s: far longer than the async
+# preload had before the player pressed "To next grand prix", so fly_to() fell
+# back to capturing synchronously and the map stalled. This ceiling keeps it
+# near the original ~2s; _FLY_BORDER_TRIM already carries the thinness, so the
+# slightly softer border at this DPI reads fine. (Raise for crisper-but-slower,
+# lower for faster-but-softer — it trades only crispness, not thinness.)
+_FLY_DPI_MAX       = 600
+# Target DEVICE-pixel width the landing crop should resolve to. Device, not
+# logical: on a HiDPI display (Windows scaling 125/150%) the widget's backing
+# store is devicePixelRatio× wider, so the crop is bilinear-upscaled to that
+# many pixels — under-resolve it and the border blooms again. Kept as a fixed,
+# generous floor (rather than read from self.width() at capture time, which
+# preload_fly() often calls before the map widget has its real size) so a
+# typical fullscreen HiDPI landing lands crisp regardless of capture timing;
+# genuinely larger monitors bump it up via the devicePixelRatio term below.
+_FLY_DPI_TARGET_PX = 2600
 # Extra fractional padding added around highlight()'s normal (tight) zoom for
 # fly_to()'s landing — a full-screen transition needs more breathing room
 # around the destination than the small Calendar/Circuit map panel does, so
@@ -33,39 +64,60 @@ _FLY_END_PAD_MULT = 0.7
 # so a higher capture DPI makes the line crisper but NOT thinner.) The factor
 # depends on how far apart the pair is: a far pair like Japan->Qatar zooms in
 # ~4-5x on landing, a near pair barely at all — so a single baked linewidth
-# can't read the same at every zoom. It looked heavy through the zoom-in and
-# then snapped thin the moment highlight() took over with a live (screen-space)
-# render, most visibly on far-apart pairs.
+# can't read the same at every zoom.
 #
 # So the capture linewidth is computed PER FLIGHT (see _fly_linewidths) so the
-# most zoomed-in frame of THAT flight renders its borders at
-# _FLY_TARGET_BORDER_PX — the weight the live canvas draws — making the bitmap
-# overlay hand off to highlight() seamlessly, with no frame ever thicker than
-# the live view (the wider middle of the flight just reads a touch fainter).
-# The constants below are only a fallback for when the screen size / flight
-# boxes aren't known.
+# most zoomed-in frame of THAT flight — the one the animation actually lands
+# on — renders its borders at exactly the weight the live canvas (_on_loaded's
+# self._world.plot(..., linewidth=_LIVE_BORDER_LW)) draws them at, so the
+# hand-off to highlight() is seamless.
+#
+# Both the live canvas and this capture stretch a FIXED-INCHES Figure to fill
+# whatever pixel width their widget currently has, so a linewidth's on-screen
+# pixel thickness scales with that widget's width for both — identically —
+# and that scaling cancels out completely when matching one to the other.
+# What's left is purely the data-space magnification the crop introduces
+# (view_w/wide_w), independent of screen size or DPI. `view_w` here is the
+# LANDING view (end_box) — the frame the flight actually holds on and hands
+# off to highlight() — so the border weight is exact at that hand-off; wider
+# frames earlier in the flight just read a touch fainter, which is invisible
+# in motion. An earlier version instead targeted a hardcoded PIXEL constant
+# computed from self.width() at calibration time — correct only for the one
+# window width it happened to be tuned against.
 _FLY_BORDER_LW  = 0.13
-_FLY_OUTLINE_LW = 0.2
-_FLY_OUTLINE_RATIO = _FLY_OUTLINE_LW / _FLY_BORDER_LW   # keep the highlight outline proportionally heavier
-_FLY_TARGET_BORDER_PX = 2.7    # on-screen border weight the flight lands on (live canvas plots at linewidth 0.6)
+_FLY_OUTLINE_LW = _FLY_BORDER_LW
+# The from/to flags' own outline used to be stroked ~1.54x heavier than the
+# ordinary country borders (a deliberate "make the flagged countries pop"
+# emphasis) — but since that emphasis only exists during the flight capture,
+# not in the live canvas's resting view (highlight()'s flag outline there is
+# only mildly heavier: 0.8pt vs the 0.6pt base border), it read as an
+# unrelated flash of extra-bold border right as the flight handed off to
+# highlight() and that emphasis vanished. Matching it 1:1 to the base border
+# during the flight removes that mismatch.
+_FLY_OUTLINE_RATIO = 1.0
 _FLY_FIG_W_IN = 6              # _capture_flight_png's figure width in inches (see its figsize)
+_LIVE_FIG_W_IN  = 6             # WorldMapWidget's own Figure width in inches (self._fig figsize, __init__)
+_LIVE_BORDER_LW = 0.6           # linewidth (points) the live canvas draws borders at (_on_loaded)
+# The geometric match above lands the raster border at the SAME weight as the
+# live one, but whatever bilinear-upscale bloom survives the per-flight DPI
+# (see _flight_capture_dpi) still spreads it a hair softer/heavier than the
+# crisp vector line it hands off to. This trim shaves the baked border a touch
+# below the exact match so, once that residual bloom widens it back, it reads
+# as thin as the resting map. Purely cosmetic — nudge toward 1.0 for heavier,
+# down for thinner.
+_FLY_BORDER_TRIM = 0.7
 
 
-def _fly_linewidths(view_w: float, wide_w: float, screen_w_px: float) -> tuple:
+def _fly_linewidths(view_w: float, wide_w: float) -> tuple:
     """(border_lw, outline_lw) in points for _capture_flight_png so that the
-    tightest flight frame — a view `view_w` data-units wide, cropped out of a
-    capture spanning `wide_w` data-units and stretched to `screen_w_px` — draws
-    its borders at ~_FLY_TARGET_BORDER_PX on screen.
-
-    A line of L points is L/72 inch = L*wide_w/(72*_FLY_FIG_W_IN) data-units
-    thick in the capture; shown at screen_w_px/view_w px per data-unit that is
-    L*wide_w*screen_w_px/(72*_FLY_FIG_W_IN*view_w) px on screen. Solving that
-    for the target thickness gives the linewidth below. `view_w` is the
-    NARROWEST view of the flight (min of start/end box), so no frame ends up
-    thicker than the target."""
-    if wide_w <= 0 or view_w <= 0 or screen_w_px <= 0:
+    landing flight frame — a view `view_w` data-units wide, cropped out of a
+    capture spanning `wide_w` data-units — renders its borders at the same
+    on-screen weight the live canvas draws them at (less _FLY_BORDER_TRIM, to
+    offset residual upscale bloom), on any screen size (see the module comment
+    above for why screen width drops out entirely)."""
+    if wide_w <= 0 or view_w <= 0:
         return _FLY_BORDER_LW, _FLY_OUTLINE_LW
-    border = _FLY_TARGET_BORDER_PX * 72.0 * _FLY_FIG_W_IN * view_w / (wide_w * screen_w_px)
+    border = _LIVE_BORDER_LW * (_FLY_FIG_W_IN / _LIVE_FIG_W_IN) * (view_w / wide_w) * _FLY_BORDER_TRIM
     return border, border * _FLY_OUTLINE_RATIO
 
 _GEOJSON  = Path(__file__).parent.parent.parent / 'data' / 'world_countries.geojson'
@@ -246,7 +298,18 @@ def _capture_flight_png(world, iso2_map: dict, box: tuple,
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_facecolor(OCEAN)
     ax.set_axis_off()
-    world.plot(ax=ax, color=LAND, edgecolor=BORDER, linewidth=border_lw)
+    # Only the countries intersecting the captured box are visible; plotting the
+    # whole world at the raised per-flight DPI (see _flight_capture_dpi) made the
+    # render slow enough to stall "To next grand prix" when the async preload
+    # hadn't finished and fly_to() had to capture synchronously. Clipping to the
+    # view first drops the hundreds of off-screen polygons matplotlib would
+    # otherwise still process, so the capture is fast again at the same DPI.
+    # (.cx keeps any geometry intersecting the box whole; xlim/ylim below crops
+    # the overhang. Flag lookups still use the full `world`.)
+    world_vis = world.cx[box[0]:box[1], box[2]:box[3]]
+    if world_vis.empty:
+        world_vis = world
+    world_vis.plot(ax=ax, color=LAND, edgecolor=BORDER, linewidth=border_lw)
     _draw_flag_on(ax, world, iso2_map, from_country, outline_lw)
     _draw_flag_on(ax, world, iso2_map, to_country, outline_lw)
     ax.set_xlim(box[0], box[1])
@@ -344,7 +407,7 @@ class WorldMapWidget(QWidget):
         self._fly_capture_thread: _FlyCaptureThread | None = None
         self._fly_end_box: tuple | None = None          # current flight's landing box — see fly_to/fly_skip
 
-        self._fig = Figure(figsize=(6, 3.6), dpi=100)
+        self._fig = Figure(figsize=(_LIVE_FIG_W_IN, 3.6), dpi=100)
         self._fig.patch.set_facecolor(BG)
         self._ax  = self._fig.add_axes([0, 0, 1, 1])
         self._ax.set_facecolor(OCEAN)
@@ -399,7 +462,7 @@ class WorldMapWidget(QWidget):
 
         self._names = self._world['ADMIN'].tolist()
 
-        self._world.plot(ax=self._ax, color=LAND, edgecolor=BORDER, linewidth=0.6)
+        self._world.plot(ax=self._ax, color=LAND, edgecolor=BORDER, linewidth=_LIVE_BORDER_LW)
         self._collection = self._ax.collections[0] if self._ax.collections else None
 
         self._ax.set_xlim(*_WX)
@@ -520,7 +583,6 @@ class WorldMapWidget(QWidget):
             self._pending = country_name
             return
 
-        self._pages.setCurrentWidget(self._canvas)   # in case fly_to() left the overlay showing
         self._active = country_name
 
         if self._collection is not None:
@@ -554,7 +616,19 @@ class WorldMapWidget(QWidget):
             self._label.set_text(country_name)
             self._label.set_visible(True)
 
-        self._canvas.draw_idle()
+        # Render synchronously WHILE the canvas may still be the hidden page
+        # (fly_to() leaves the overlay showing), then swap it into view only
+        # once it's fully up to date — never the other way round. draw_idle()
+        # merely schedules a repaint for the next event-loop turn, which after
+        # a QStackedWidget page switch let the canvas be swapped in and get
+        # its first real paintEvent (recomputing Qt's devicePixelRatio-scaled
+        # backing buffer) BEFORE that scheduled redraw had actually landed —
+        # so borders briefly rendered at a stale/mismatched buffer size right
+        # on landing (the sub-second "flash thicker, then thin again" from
+        # fly_to()'s handoff), self-correcting the moment the queued draw_idle()
+        # finally ran.
+        self._canvas.draw()
+        self._pages.setCurrentWidget(self._canvas)   # in case fly_to() left the overlay showing
 
     def _country_box(self, country_name: str):
         """(x0, x1, y0, y1) padded view bounds for a country's mainland
@@ -619,12 +693,31 @@ class WorldMapWidget(QWidget):
         return start_box, end_box, wide_box
 
     def _flight_linewidths(self, start_box, end_box, wide_box) -> tuple:
-        """Per-flight (border_lw, outline_lw) for the capture — tuned to this
-        flight's tightest view so its borders land at the live canvas's own
-        weight instead of thickening on the zoom-in (see _fly_linewidths)."""
-        view_w = min(start_box[1] - start_box[0], end_box[1] - end_box[0])
+        """Per-flight (border_lw, outline_lw) for the capture — tuned to the
+        LANDING view (end_box) so the border weight is exact at the moment the
+        flight hands off to the live canvas (see _fly_linewidths)."""
+        view_w = end_box[1] - end_box[0]
         wide_w = wide_box[1] - wide_box[0]
-        return _fly_linewidths(view_w, wide_w, self.width())
+        return _fly_linewidths(view_w, wide_w)
+
+    def _flight_capture_dpi(self, end_box, wide_box) -> int:
+        """Per-flight DPI for _capture_flight_png so the LANDING crop renders at
+        ~screen resolution (no bilinear upscaling → no bloomed border on
+        landing — see the module comment on _FLY_DPI_*). The landing crop spans
+        end_w/wide_w of the PNG's width (_FLY_FIG_W_IN * dpi px); solving for
+        that crop to be ~`target` px wide, then clamped."""
+        end_w  = end_box[1] - end_box[0]
+        wide_w = wide_box[1] - wide_box[0]
+        if end_w <= 0 or wide_w <= 0:
+            return _FLY_DPI_MIN
+        # Device pixels, so HiDPI scaling doesn't secretly upscale (bloom) the
+        # crop — see _FLY_DPI_TARGET_PX. self.width() is logical; multiply by
+        # the device pixel ratio, and floor at the fixed target for the common
+        # fullscreen case (and for when preload runs before the widget is sized).
+        dpr = self.devicePixelRatioF() or 1.0
+        target = max(self.width() * dpr, _FLY_DPI_TARGET_PX)
+        dpi = target * (wide_w / end_w) / _FLY_FIG_W_IN
+        return int(min(_FLY_DPI_MAX, max(_FLY_DPI_MIN, dpi)))
 
     def preload_fly(self, from_country: str, to_country: str):
         """Kick off fly_to()'s expensive wide-view capture in the BACKGROUND,
@@ -649,8 +742,9 @@ class WorldMapWidget(QWidget):
             return
         start_box, end_box, wide_box = boxes
         border_lw, outline_lw = self._flight_linewidths(start_box, end_box, wide_box)
+        dpi = self._flight_capture_dpi(end_box, wide_box)
         th = _FlyCaptureThread(key, self._world, self._iso2_map, wide_box,
-                               from_country, to_country, _FLY_CAPTURE_DPI,
+                               from_country, to_country, dpi,
                                border_lw, outline_lw)
         th.ready.connect(self._on_fly_captured)
         self._fly_capture_thread = th
@@ -707,8 +801,9 @@ class WorldMapWidget(QWidget):
         else:
             QCoreApplication.processEvents()   # actually paint the highlight() above before blocking
             border_lw, outline_lw = self._flight_linewidths(start_box, end_box, wide_box)
+            dpi = self._flight_capture_dpi(end_box, wide_box)
             png = _capture_flight_png(self._world, self._iso2_map, wide_box,
-                                      from_country, to_country, _FLY_CAPTURE_DPI,
+                                      from_country, to_country, dpi,
                                       border_lw, outline_lw)
             pixmap = QPixmap()
             pixmap.loadFromData(png, 'PNG')

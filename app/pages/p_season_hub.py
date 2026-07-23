@@ -1925,11 +1925,24 @@ class _TrackHistoryPanel(QWidget):
     _MODES = ['LAST 5 WINNERS', 'LAST 5 POLESITTERS']
     _SLOTS = 5
     _CYCLE_MS = 5000
+    # A notch shorter than _MINI_ROW_H: five rows in the shorter (2-card) left
+    # column leave almost no room under the last one, so shaving 2px/row buys
+    # back enough height for a comfortable gap above the card's bottom edge
+    # without risking the clip that a taller row / bigger bottom margin caused.
+    _ROW_H = 24
 
     def __init__(self):
         super().__init__()
         self.setStyleSheet('background: transparent;')
         lay = QVBoxLayout(self)
+        # Slimmer rigid spacing than the other panels: this is the last card in
+        # the shorter (2-card) left column, set Expanding to pin its bottom to
+        # Recent Form's — so on a short window (e.g. 150%-scaled 1080p) the
+        # column can't fit Next Race + five fixed-height rows and the trailing
+        # rigid space would push the last row's bottom past the card, clipping
+        # it. Shorter rows (_ROW_H) + tighter row spacing keep the five rows
+        # compact enough that the bottom margin below stays a comfortable gap
+        # rather than either clipping or hugging the last row.
         lay.setContentsMargins(14, 10, 14, 12)
         lay.setSpacing(0)
 
@@ -1944,7 +1957,7 @@ class _TrackHistoryPanel(QWidget):
         self._rows_holder.setStyleSheet('background: transparent;')
         self._rows_lay = QVBoxLayout(self._rows_holder)
         self._rows_lay.setContentsMargins(0, 0, 0, 0)
-        self._rows_lay.setSpacing(8)
+        self._rows_lay.setSpacing(6)
         lay.addWidget(self._rows_holder)
         lay.addStretch(1)
 
@@ -1982,11 +1995,11 @@ class _TrackHistoryPanel(QWidget):
 
         for i in range(self._SLOTS):
             row = QFrame()
-            # _MINI_ROW_H, not _DASH_ROW_H: five 30px rows plus the Next
-            # Race card above pushed the left column past what a
-            # 150%-scaled 1080p screen can show, and the resulting squeeze
-            # mashed the cards' text together.
-            row.setFixedHeight(_MINI_ROW_H)
+            # _ROW_H (shorter than _MINI_ROW_H, itself shorter than _DASH_ROW_H):
+            # five rows plus the Next Race card above pushed the left column past
+            # what a 150%-scaled 1080p screen can show, and the resulting squeeze
+            # mashed the cards' text together / clipped the last row.
+            row.setFixedHeight(self._ROW_H)
             rl = QHBoxLayout(row)
             rl.setContentsMargins(10, 0, 10, 0)
             rl.setSpacing(8)

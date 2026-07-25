@@ -760,7 +760,9 @@ class CalendarPage(QWizardPage):
 
     def _resume_season(self):
         """Load the saved season into the wizard and jump straight to the
-        current round's practice."""
+        current round — career: whichever session was up next when the app
+        last closed, not always Practice (see the session_index restore
+        below); championship/random always resume at Practice."""
         wiz  = self._wiz
         data = self._save or wiz.load_season_save()
         if not data:
@@ -797,8 +799,37 @@ class CalendarPage(QWizardPage):
              # as None rather than crashing (their records are unrecoverable).
              'lap_records': rd.get('lap_records')}
             for rd in data['round_results']]
-        wiz.race_pts     = []
-        wiz.race_results = []
+
+        # In-progress round (career): restore exactly which session is up
+        # next and whatever that round has produced so far, so resuming after
+        # e.g. Race 1 lands back on Race 2 instead of restarting the weekend
+        # at Practice. .get() defaults keep older saves (written before these
+        # keys existed) loading fine as a fresh round. See wiz.save_season /
+        # SeasonHubPage.initializePage.
+        def _df_or_none(records):
+            return pd.DataFrame(records) if records else None
+
+        wiz.session_index    = int(data.get('session_index', 0))
+        wiz.weekend_weather  = data.get('weekend_weather')
+        wiz.practice_results = _df_or_none(data.get('practice_results'))
+        quali = data.get('quali_result')
+        if quali:
+            q1, q2, adv, nq, grid = quali
+            wiz.quali_result = (_df_or_none(q1), _df_or_none(q2), list(adv),
+                               _df_or_none(nq), _df_or_none(grid))
+        else:
+            wiz.quali_result = None
+        wiz.grid_all_df  = _df_or_none(data.get('grid_all_df'))
+        wiz.race_pts     = [pd.DataFrame(r) for r in data.get('race_pts', [])]
+        wiz.race_results = [pd.DataFrame(r) for r in data.get('race_results', [])]
+        wiz.race_fastest_laps = [tuple(x) for x in data.get('race_fastest_laps', [])]
+        # PracticePage/QualifyingPage/RacePage all read wiz.circuit directly
+        # (only PracticePage's own initializePage sets it, from a fresh visit)
+        # — a mid-round resume that skips straight back to Qualifying/Race
+        # needs it set here instead.
+        wiz.circuit = (wiz.season_df.iloc[wiz.circuit_index]
+                       if wiz.circuit_index < len(wiz.season_df) else None)
+
         self._rounds = max(1, min(self._n, int(data['rounds'])))
         self._resume = True
         wiz.next()

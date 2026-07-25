@@ -385,6 +385,12 @@ class ChampionshipPage(QWizardPage):
             return
         if self._has_next_round():
             self._bank_round()
+            if to_hub:
+                # Reset before saving: the banked round's session_index (4)
+                # would otherwise persist as this save's resume point, making
+                # CONTINUE reopen the just-finished round instead of the next
+                # one's Practice.
+                wiz.session_index = 0
             wiz.save_season()
         else:
             self._save_history()
@@ -464,6 +470,11 @@ class ChampionshipPage(QWizardPage):
         """
         wiz = self._wiz
         self._bank_round()
+        if wiz.mode == 'career':
+            # Reset before saving (see _confirm_home) so the persisted
+            # resume point is the next round's Practice, not the round that
+            # was just banked.
+            wiz.session_index = 0
         wiz.save_season()               # resume point: start of the next round
         if wiz.mode == 'career':
             # Career runs the weekend from the hub — drop back to the Season Hub
@@ -471,7 +482,6 @@ class ChampionshipPage(QWizardPage):
             # straight into the Practice page. The hub reads this as a between-GP
             # boundary (session_index 0, circuit_index just bumped > 0) and shows
             # the "TO NEXT GRAND PRIX" recap — see SeasonHubPage._refresh_data.
-            wiz.session_index = 0
             wiz.return_to_hub()
             return
         while wiz.currentId() not in (wiz.ID_PRACTICE, wiz.startId()):

@@ -320,11 +320,15 @@ class MotoWizard(QWizard):
 
     def return_to_hub_after_session(self):
         """Career only: a single weekend session just finished — advance the
-        session pointer and walk history back to the Season Hub, which the hub
-        excursion (hub -> next() -> session page) sits exactly one page ahead
-        of. resume_at_hub() re-reads state so the 'Upcoming session' box shows
-        the next session. See SESSION_NAMES / SeasonHubPage.nextId()."""
+        session pointer, persist that progress (so quitting here and
+        resuming later continues the round instead of restarting it at
+        Practice — see save_season), and walk history back to the Season
+        Hub, which the hub excursion (hub -> next() -> session page) sits
+        exactly one page ahead of. resume_at_hub() re-reads state so the
+        'Upcoming session' box shows the next session. See SESSION_NAMES /
+        SeasonHubPage.nextId()."""
         self.session_index += 1
+        self.save_season()
         self.return_to_hub()
 
     def return_to_hub(self):
@@ -583,12 +587,23 @@ class MotoWizard(QWizard):
         return self.career_slot_dir() / 'history.json' if self.mode == 'career' else HISTORY_FILE
 
     def save_season(self):
-        """Snapshot the running season (at round granularity) so the player
-        can continue after restarting the app. Called explicitly at season
-        start, on every round advance and by the Home button — never blindly
-        on exit (stale wizard state must not overwrite the file)."""
+        """Snapshot the running season so the player can continue after
+        restarting the app: banked rounds (round granularity) plus — career
+        only — the in-progress round's own session state. Called at season
+        start, after every session within a round (return_to_hub_after_session),
+        on every round advance and by the Home button — never blindly on exit
+        (stale wizard state must not overwrite the file)."""
         if self.mode not in SEASON_MODES or self.season_df is None:
             return
+
+        def _recs(df):
+            return df.to_dict('records') if df is not None else None
+
+        quali = None
+        if self.quali_result is not None:
+            q1, q2, adv, nq, grid = self.quali_result
+            quali = [_recs(q1), _recs(q2), list(adv), _recs(nq), _recs(grid)]
+
         data = {
             'year':          self.season_year,
             'rounds':        len(self.season_df),
@@ -605,6 +620,19 @@ class MotoWizard(QWizard):
                  # why some tracks' Best Race Lap / All-Time Record read blank).
                  'lap_records': rd.get('lap_records')}
                 for rd in self.round_results],
+            # In-progress round (career): which session is up next and
+            # whatever that round has produced so far. Without these, quitting
+            # mid-round (e.g. right after Race 1) and resuming always restarted
+            # the round from Practice, silently discarding the sessions already
+            # played — see SeasonHubPage.initializePage / CalendarPage._resume_season.
+            'session_index':     self.session_index,
+            'weekend_weather':   self.weekend_weather,
+            'practice_results':  _recs(self.practice_results),
+            'quali_result':      quali,
+            'grid_all_df':       _recs(self.grid_all_df),
+            'race_pts':          [df.to_dict('records') for df in self.race_pts],
+            'race_results':      [df.to_dict('records') for df in self.race_results],
+            'race_fastest_laps': [list(x) for x in self.race_fastest_laps],
         }
         self.season_save_path().write_text(json.dumps(data, default=int), encoding='utf-8')
 

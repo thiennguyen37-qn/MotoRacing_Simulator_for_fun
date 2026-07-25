@@ -3547,10 +3547,14 @@ class SeasonHubPage(QWizardPage):
                                self._wiz.season_df, current_rounds_detail)
 
     def initializePage(self):
-        # Fresh arrival from Calendar: begin the weekend at the first session.
-        # resume_at_hub() (mid-weekend re-entry) deliberately leaves
-        # session_index alone so the round continues where it paused.
-        self._wiz.session_index = 0
+        # Arrival from Calendar: either a brand-new round (session_index is
+        # already 0 in memory — see reset_career_progress/begin_next_season_
+        # setup/_bank_round's boundary reset) or CONTINUE resuming an
+        # in-progress one exactly where it paused (session_index restored
+        # from disk by CalendarPage._resume_season). Either way the value
+        # already in memory is the right one — don't stomp it here.
+        # resume_at_hub() (mid-weekend re-entry within the same run) likewise
+        # leaves session_index alone so the round continues where it paused.
         self._hub_focus = 0
         # Switch to the career soundtrack BEFORE any pause/resume below, so a
         # season-start intro pauses (and later resumes) the career track

@@ -57,10 +57,13 @@ if _OK:
             self._playlist: list[Path] = []
             self._track_info: list[tuple[str, str]] = []
             self._idx = 0
-            # Set right before _activate_set's automatic career<->main switch
+            # Set right before _activate_set's automatic main->career switch
             # starts a track, so that switch doesn't pop the now-playing toast
             # (play_at() — the user explicitly picking a track on the
             # Soundtrack page — never sets this, so that toast still shows).
+            # The career set itself is always toast-free regardless of this
+            # flag (see _active_set checks below) — it's a single placeholder
+            # theme track, so looping back to it has nothing new to announce.
             self._suppress_toast = False
             self._current_path: Path | None = None
             self._meta_emitted = False
@@ -156,15 +159,16 @@ if _OK:
             clean_title = re.sub(r'\s*\([^)]*\)', '', str(title)).strip()
             info = (clean_title, artist)
             self._track_info[self._idx] = info
-            if self._suppress_toast:
-                self._suppress_toast = False
+            suppress = self._suppress_toast or self._active_set == 'career'
+            self._suppress_toast = False
+            if suppress:
                 return
             self.track_changed.emit(*info)
 
         def _on_playback_state(self, state) -> None:
             if state == QMediaPlayer.PlaybackState.PlayingState and not self._meta_emitted:
                 self._meta_emitted = True
-                suppress = self._suppress_toast
+                suppress = self._suppress_toast or self._active_set == 'career'
                 self._suppress_toast = False
                 if self._current_path and not suppress:
                     info = _parse_track(self._current_path)

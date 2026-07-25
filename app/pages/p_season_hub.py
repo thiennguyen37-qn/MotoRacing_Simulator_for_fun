@@ -1000,6 +1000,17 @@ class _ProfileScreen(QWidget):
 # ── Read-only calendar recap ───────────────────────────────────────────────────
 
 class _CalendarView(QWidget):
+    # Row height flexes between _ROW_MIN_H and _ROW_MAX_H so the whole
+    # calendar — up to every available circuit (13 as of writing) — always
+    # fills the viewport with no scrollbar and no dead space below the last
+    # row: _fit_rows() sizes rows to consume the full available height
+    # first, only clamping at the edges (MIN so a packed 13-round calendar
+    # never gets uncomfortably thin; MAX so a short season's few rows don't
+    # balloon to fill the whole screen on their own).
+    _ROW_MIN_H   = 26
+    _ROW_MAX_H   = 64
+    _ROW_SPACING = 10
+
     def __init__(self):
         super().__init__()
         self.setStyleSheet('background: transparent;')
@@ -1018,10 +1029,11 @@ class _CalendarView(QWidget):
         cont.setStyleSheet('background: transparent;')
         self._lay = QVBoxLayout(cont)
         self._lay.setContentsMargins(0, 0, 12, 0)
-        self._lay.setSpacing(8)
+        self._lay.setSpacing(self._ROW_SPACING)
         self._lay.addStretch(1)
         self._scroll.setWidget(cont)
         outer.addWidget(self._scroll, 1)
+        self._bars: list[_SlotBar] = []
 
     def load(self, season_df):
         while self._lay.count() > 1:

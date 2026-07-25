@@ -52,9 +52,9 @@ _BAR_SS = """
 # ── Round slot bar (left column) ──────────────────────────────────────────────
 
 class _SlotBar(QFrame):
-    def __init__(self, round_no: int):
+    def __init__(self, round_no: int, height: int = 32):
         super().__init__()
-        self.setFixedHeight(32)
+        self.setFixedHeight(height)
         self._focused = False
         self._filled  = False
 
@@ -85,6 +85,9 @@ class _SlotBar(QFrame):
     def set_focused(self, v: bool):
         self._focused = v
         self._apply()
+
+    def set_row_height(self, height: int):
+        self.setFixedHeight(height)
 
     def set_circuit(self, circuit):
         """circuit: pandas row or None (empty slot)."""

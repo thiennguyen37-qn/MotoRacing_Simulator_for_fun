@@ -2938,7 +2938,7 @@ def _build_riders_detail_table(standings: list, rounds_detail: list):
         t.setItem(i, pts_col, _cell(int(s.get('points', 0)), neutral, bold=True, center=True, size=11))
 
     t.setColumnWidth(0, 56)
-    t.setColumnWidth(1, 190)
+    t.setColumnWidth(1, 240)   # RIDER (roomy — some names are long, e.g. "Juan Francisco Valdes")
     for c in range(max_races):
         t.setColumnWidth(race0 + c, 54)
     t.setColumnWidth(pts_col, 70)

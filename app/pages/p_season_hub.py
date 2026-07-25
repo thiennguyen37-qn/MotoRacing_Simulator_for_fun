@@ -1041,12 +1041,35 @@ class _CalendarView(QWidget):
             w = item.widget()
             if w is not None:
                 w.setParent(None)
+        self._bars = []
         if season_df is None:
             return
         for i, (_, row) in enumerate(season_df.iterrows(), start=1):
             bar = _SlotBar(i)
             bar.set_circuit(row)
+            self._bars.append(bar)
             self._lay.insertWidget(self._lay.count() - 1, bar)
+        # Deferred a tick: the scroll area's viewport isn't laid out to its
+        # final size yet on this same call (e.g. right after the page is
+        # first built) — see resume_at_hub's own QTimer.singleShot(0, ...)
+        # for the same reason.
+        QTimer.singleShot(0, self._fit_rows)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_rows()
+
+    def _fit_rows(self):
+        n = len(self._bars)
+        if not n:
+            return
+        avail = self._scroll.viewport().height()
+        if avail <= 0:
+            return
+        spacing_total = self._ROW_SPACING * max(0, n - 1)
+        row_h = max(self._ROW_MIN_H, min(self._ROW_MAX_H, (avail - spacing_total) // n))
+        for bar in self._bars:
+            bar.set_row_height(int(row_h))
 
     def scroll(self, delta: int):
         bar = self._scroll.verticalScrollBar()
@@ -2863,7 +2886,14 @@ class _HubDashboard(QWidget):
 
 class _StandingsListView(QWidget):
     """Pos / Name / Points list — shared by Riders (BASIC), Teams, and
-    Manufacturers, each supplying its own per-row colour lookup."""
+    Manufacturers, each supplying its own per-row colour lookup.
+
+    The title lives outside its own internal QScrollArea (only the rows sit
+    inside it) so a long list scrolls in place under a pinned title, instead
+    of the whole view — title included — panning as one block. Same pattern
+    as _CalendarView; see _SideSubHub's needs_scroll=False branch, which is
+    why this view supplies its own scrollbar() instead of being wrapped in
+    another QScrollArea from outside."""
 
     def __init__(self, title: str):
         super().__init__()
@@ -2878,13 +2908,26 @@ class _StandingsListView(QWidget):
         outer.addWidget(title_lbl)
         outer.addSpacing(20)
 
+        self._scroll = _make_scroll_area()
         self._rows_holder = QWidget()
         self._rows_holder.setStyleSheet('background: transparent;')
         self._rows_lay = QVBoxLayout(self._rows_holder)
-        self._rows_lay.setContentsMargins(0, 0, 0, 0)
+        self._rows_lay.setContentsMargins(0, 0, 12, 0)
         self._rows_lay.setSpacing(10)
         self._rows_lay.addStretch(1)
-        outer.addWidget(self._rows_holder)
+        self._scroll.setWidget(self._rows_holder)
+        outer.addWidget(self._scroll, 1)
+
+    def scrollbar(self):
+        return self._scroll.verticalScrollBar()
+
+    def reset(self):
+        """Scroll back to top when this view is closed/reopened — mirrors
+        what the (now-removed) outer wrapping QScrollArea used to do via
+        _SideSubHub.reset()'s own sc.verticalScrollBar() reset."""
+        bar = self._scroll.verticalScrollBar()
+        if bar is not None:
+            bar.setValue(0)
 
     def load(self, rows: list, color_fn):
         while self._rows_lay.count() > 1:
@@ -2974,22 +3017,53 @@ def _build_riders_detail_table(standings: list, rounds_detail: list):
 
 class _RidersDetailView(QWidget):
     """Riders Standings — DETAILS: race-by-race finishing order, championship-
-    mode style (contrast BASIC's plain Pos/Name/Points list)."""
+    mode style (contrast BASIC's plain Pos/Name/Points list).
+
+    The title lives outside its own internal QScrollArea (only the table
+    sits inside it) so a season with enough riders/races to overflow one
+    screen scrolls the table in place under a pinned title, instead of the
+    whole view — title included — panning as one block. Same pattern as
+    _StandingsListView/_CalendarView; see _SideSubHub's needs_scroll
+    docstring."""
 
     def __init__(self):
         super().__init__()
         self.setStyleSheet('background: transparent;')
-        self._lay = QVBoxLayout(self)
-        self._lay.setContentsMargins(12, 44, 12, 40)
-        self._lay.setSpacing(0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 44, 12, 40)
+        outer.setSpacing(0)
 
         title = QLabel('RIDERS — RACE BY RACE')
         title.setFont(QFont('Segoe UI', 22, QFont.Weight.Bold))
         title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
-        self._lay.addWidget(title)
-        self._lay.addSpacing(22)
+        outer.addWidget(title)
+        outer.addSpacing(22)
+
+        # Horizontal scrolling of the wide R1…Rn grid stays with the table's
+        # own scrollbar (_build_riders_detail_table) — this wrap only ever
+        # needs to move vertically (_make_scroll_area already keeps its own
+        # horizontal bar off).
+        self._scroll = _make_scroll_area()
+        cont = QWidget()
+        cont.setStyleSheet('background: transparent;')
+        self._lay = QVBoxLayout(cont)
+        self._lay.setContentsMargins(0, 0, 12, 0)
+        self._lay.setSpacing(0)
         self._lay.addStretch(1)
+        self._scroll.setWidget(cont)
+        outer.addWidget(self._scroll, 1)
         self._body = None
+
+    def scrollbar(self):
+        return self._scroll.verticalScrollBar()
+
+    def reset(self):
+        """Scroll back to top when this view is closed/reopened — mirrors
+        what the (now-removed) outer wrapping QScrollArea used to do via
+        _SideSubHub.reset()'s own sc.verticalScrollBar() reset."""
+        bar = self._scroll.verticalScrollBar()
+        if bar is not None:
+            bar.setValue(0)
 
     def load(self, standings: list, rounds_detail: list | None):
         if self._body is not None:
@@ -3007,16 +3081,20 @@ class _RidersDetailView(QWidget):
         self._lay.insertWidget(self._lay.count() - 1, self._body)
 
     def scroll_by(self, dx: int, dy: int):
-        """Pan the race-by-race grid with the arrow keys — same rationale as
-        _ResultsView.scroll_by (career Results, in Your Profile): the table
-        owns its own scrollbars, the wrapping QScrollArea can't drive them."""
+        """Pan the race-by-race grid with the arrow keys: horizontal through
+        the table's own scrollbar (R1…Rn can be wider than the viewport);
+        vertical through this view's own internal QScrollArea instead of the
+        table's — the table fixes its own height to fit every rider with no
+        vertical scrollbar of its own (see _build_riders_detail_table),
+        precisely so this wrap is what has room to move."""
         body = self._body
         hbar = getattr(body, 'horizontalScrollBar', None)
-        vbar = getattr(body, 'verticalScrollBar', None)
         if dx and callable(hbar):
             bar = hbar(); bar.setValue(bar.value() + dx)
-        if dy and callable(vbar):
-            bar = vbar(); bar.setValue(bar.value() + dy)
+        if dy:
+            bar = self._scroll.verticalScrollBar()
+            if bar is not None:
+                bar.setValue(bar.value() + dy)
 
 
 class _RidersStandingsScreen(_SideSubHub):
@@ -3034,7 +3112,12 @@ class _RidersStandingsScreen(_SideSubHub):
              'Press Enter to see the shortened version']
 
     def __init__(self, basic_view: _StandingsListView, detail_view: _RidersDetailView):
-        super().__init__([('BASIC', basic_view, True), ('DETAILS', detail_view, True)],
+        # Both False: _StandingsListView/_RidersDetailView each scroll their
+        # own content internally (title stays pinned above it) — wrapping
+        # either in another outer QScrollArea here would scroll the title
+        # along with the content. See their own docstrings / _SideSubHub's
+        # needs_scroll docstring.
+        super().__init__([('BASIC', basic_view, False), ('DETAILS', detail_view, False)],
                          tint_margin=16, cycle=True)
 
         self._footer = QLabel()
@@ -3072,8 +3155,8 @@ class _StandingsScreen(_SideSubHub):
         self._manu = _StandingsListView('MANUFACTURERS')
         super().__init__([
             ('RIDERS', self._riders, False),
-            ('TEAMS', self._teams, True),
-            ('MANUFACTURERS', self._manu, True),
+            ('TEAMS', self._teams, False),
+            ('MANUFACTURERS', self._manu, False),
         ], tint_margin=24)
 
     def load(self, riders: list, teams: list, manu: list, rounds_detail: list | None):

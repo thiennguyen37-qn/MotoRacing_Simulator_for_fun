@@ -95,8 +95,10 @@ class QualifyingPage(QWizardPage):
         self._q1_done = False
         self._q2_done = False
         self._career_session_done = False
+        self._btn_q1.setVisible(True)
         self._btn_q1.setEnabled(True)
         self._btn_q1.setText('▶  Run Q1')
+        self._btn_q2.setVisible(True)
         self._btn_q2.setEnabled(False)
         self._btn_q2.setText('▶  Run Q2')
         self._status.setText('')
@@ -111,38 +113,43 @@ class QualifyingPage(QWizardPage):
         session (session_index 1) and again for Qualifying 2 (index 2). Q1
         simulates the whole session and parks the result on the wizard; the Q2
         visit restores that result so it can reveal Q2 + the grid without
-        re-simulating (which would shuffle a grid the player already saw)."""
+        re-simulating (which would shuffle a grid the player already saw).
+
+        Career runs one session per hub excursion — arriving here already
+        means the player chose to run it (via the hub's "To Next Session"),
+        so each excursion starts its own session immediately instead of
+        making them click a Run button (hidden entirely in career)."""
+        self._btn_q1.setVisible(False)
+        self._btn_q1.setEnabled(False)
+        self._btn_q2.setVisible(False)
+        self._btn_q2.setEnabled(False)
         self._career_session_done = False
         self._status.setText('')
         if self._wiz.session_index <= 1:
             # Qualifying 1 excursion — a fresh session.
             self._q1_done = False
             self._q2_done = False
-            self._btn_q1.setEnabled(True)
-            self._btn_q1.setText('▶  Run Q1')
-            self._btn_q2.setEnabled(False)
-            self._btn_q2.setText('▶  Run Q2')
             for t in (self._t_q1, self._t_q2, self._t_gr):
                 t.setRowCount(0)
             self._wiz.grid_all_df  = None
             self._wiz.quali_result = None
             self._tabs.setCurrentIndex(0)
+            self.completeChanged.emit()
+            self._run_q1()
         else:
-            # Qualifying 2 excursion — restore Q1's simulated result.
+            # Qualifying 2 excursion — restore Q1's simulated result, then
+            # run Q2.
             q1, q2, adv, nq, _grid = self._wiz.quali_result
             self._q1_class, self._q2_class = q1, q2
             self._q2_advance, self._q1_nq  = adv, nq
             self._fill_q1_table()
             self._q1_done = True
             self._q2_done = False
-            self._btn_q1.setEnabled(False)
-            self._btn_q1.setText('✓  Q1')
-            self._btn_q2.setEnabled(True)
-            self._btn_q2.setText('▶  Run Q2')
             self._t_q2.setRowCount(0)
             self._t_gr.setRowCount(0)
             self._tabs.setCurrentIndex(0)
-        self.completeChanged.emit()
+            self.completeChanged.emit()
+            self._run_q2()
 
     def _fill_q1_table(self):
         rows = []

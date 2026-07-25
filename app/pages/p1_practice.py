@@ -79,6 +79,15 @@ class PracticePage(QWizardPage):
         self._table.setRowCount(0)
         self.completeChanged.emit()
 
+        # Career runs one session per hub excursion — arriving here already
+        # means the player chose to run it (via the hub's "To Next Session"),
+        # so start immediately instead of making them click Run again.
+        # Random/Championship keep the manual button.
+        career = wiz.mode == 'career'
+        self._btn.setVisible(not career)
+        if career:
+            self._run()
+
     def _run(self):
         self._btn.setEnabled(False)
         self._status.setText('Simulating…')

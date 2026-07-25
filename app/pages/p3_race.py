@@ -340,8 +340,10 @@ class RacePage(QWizardPage):
         self._career_session_done = False
         self._stop_reveal(self._t_r1)
         self._stop_reveal(self._t_r2)
+        self._btn_r1.setVisible(True)
         self._btn_r1.setEnabled(True)
         self._btn_r1.setText('▶  Run Race 1')
+        self._btn_r2.setVisible(True)
         self._btn_r2.setEnabled(False)
         self._btn_r2.setText('▶  Run Race 2')
         self._status.setText('')
@@ -357,7 +359,16 @@ class RacePage(QWizardPage):
         then Race 2 (index 4). The Race 1 visit starts the round's races fresh;
         the Race 2 visit keeps Race 1's banked result (its table still shows it
         from the earlier visit) and runs only Race 2, so both classifications
-        accumulate into race_pts / race_results for the round summary."""
+        accumulate into race_pts / race_results for the round summary.
+
+        Career runs one session per hub excursion — arriving here already
+        means the player chose to run it (via the hub's "To Next Session"),
+        so each excursion starts its own race immediately instead of making
+        them click a Run button (hidden entirely in career)."""
+        self._btn_r1.setVisible(False)
+        self._btn_r1.setEnabled(False)
+        self._btn_r2.setVisible(False)
+        self._btn_r2.setEnabled(False)
         self._career_session_done = False
         self._stop_reveal(self._t_r1)
         self._stop_reveal(self._t_r2)
@@ -366,27 +377,22 @@ class RacePage(QWizardPage):
             # Race 1 excursion — reset the round's race state.
             self._r1_done   = False
             self._both_done = False
-            self._btn_r1.setEnabled(True)
-            self._btn_r1.setText('▶  Run Race 1')
-            self._btn_r2.setEnabled(False)
-            self._btn_r2.setText('▶  Run Race 2')
             self._t_r1.setRowCount(0)
             self._t_r2.setRowCount(0)
             self._wiz.race_pts     = []
             self._wiz.race_results = []
             self._tabs.setCurrentIndex(0)
+            self.completeChanged.emit()
+            self._run(1)
         else:
             # Race 2 excursion — Race 1 stays banked (its table still holds the
-            # earlier reveal); enable only Race 2.
+            # earlier reveal); run only Race 2.
             self._r1_done   = True
             self._both_done = False
-            self._btn_r1.setEnabled(False)
-            self._btn_r1.setText('✓  Race 1')
-            self._btn_r2.setEnabled(True)
-            self._btn_r2.setText('▶  Run Race 2')
             self._t_r2.setRowCount(0)
             self._tabs.setCurrentIndex(1)
-        self.completeChanged.emit()
+            self.completeChanged.emit()
+            self._run(2)
 
     def _run(self, race_num):
         if race_num == 1:

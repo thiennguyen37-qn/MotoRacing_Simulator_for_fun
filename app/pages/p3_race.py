@@ -58,7 +58,7 @@ def _fill(table, result_df, meta):
         )
         accent = color.darker(160) if dnf else color
 
-        fl_tag = ' ⚡' if row.get('fastest_lap') else ''
+        fl_tag = ' (FL)' if row.get('fastest_lap') else ''
         # col 2 = rider name: uppercase
         vals = [
             row['pos_label'],
@@ -502,7 +502,7 @@ class RacePage(QWizardPage):
         career  = self._wiz.mode == 'career'
         tail    = '   ·   Enter → hub' if (career and race_num == 1) else ''
         self._status.setText(
-            f"✓ Race {race_num}  {weather}  |  Winner: {winner}  |  ⚡ FL: {fl}{tail}"
+            f"✓ Race {race_num}  {weather}  |  Winner: {winner}  |  FL: {fl}{tail}"
         )
         if race_num == 1:
             self._r1_done = True

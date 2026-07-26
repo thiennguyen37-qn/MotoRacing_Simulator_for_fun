@@ -203,6 +203,7 @@ class MotoWizard(QWizard):
         from app.pages.p4_championship import ChampionshipPage
         from app.pages.p_history       import HistoryPage
         from app.pages.p_career        import CareerPage
+        from app.pages.p_transfers     import TransfersPage
         from app.pages.p_gallery       import GalleryPage
         from app.pages.p_soundtrack    import SoundtrackPage
 
@@ -217,6 +218,7 @@ class MotoWizard(QWizard):
             ('ID_WEATHER',    'Weather',      lambda: WeatherPage(self)),
             ('ID_RACE',       'Race',         lambda: RacePage(self)),
             ('ID_STANDINGS',  'Standings',    lambda: ChampionshipPage(self)),
+            ('ID_TRANSFERS',  'Transfers',    lambda: TransfersPage(self)),
             ('ID_HISTORY',    'History',      lambda: HistoryPage(self)),
             ('ID_CAREER',     'Career',       lambda: CareerPage(self)),
             ('ID_GALLERY',    'Gallery',      lambda: GalleryPage(self)),
@@ -835,6 +837,27 @@ class MotoWizard(QWizard):
         roster = self.build_initial_roster(year)
         self.save_roster(roster)
         return roster
+
+    def transfers_done_for(self, year) -> bool:
+        """Has the off-season market already been rolled for `year`?
+
+        The roster's own year is the record: TransfersPage stamps it forward the
+        moment the player signs, and nothing else moves it. That makes the
+        market exactly-once per season no matter which way the player gets
+        there — straight from the Season Hub, or back into a finished career
+        after restarting the app (see CalendarPage._resume_season)."""
+        roster = self.load_roster()
+        return roster is not None and int(roster.get('year', 0)) >= int(year)
+
+    def load_history_seasons(self) -> list:
+        """The archived seasons for the active slot, oldest first."""
+        path = self.history_path()
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text(encoding='utf-8')).get('seasons', [])
+        except (json.JSONDecodeError, OSError, AttributeError):
+            return []
 
     def apply_roster_to_df(self, roster=None):
         """Rebuild self.df from a career's roster, then append the Career rider.

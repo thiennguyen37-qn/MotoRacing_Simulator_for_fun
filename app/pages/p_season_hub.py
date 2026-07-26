@@ -3728,6 +3728,10 @@ class SeasonHubPage(QWizardPage):
         # Practice(0) -> ID_PRACTICE, Qualifying 1/2 -> ID_QUALI, Race 1/2 ->
         # ID_RACE. The pages themselves run only the session at session_index
         # and hand back to the hub afterwards (see return_to_hub_after_session).
+        # Season over (career): the off-season transfer market comes before
+        # next year's calendar — see _go_next and p_transfers.TransfersPage.
+        if self._wiz.season_complete:
+            return self._wiz.ID_TRANSFERS
         if self._showing_next_gp:
             return self._wiz.ID_GP_MAP
         idx = self._wiz.session_index
@@ -3807,11 +3811,12 @@ class SeasonHubPage(QWizardPage):
         self._stack.setCurrentIndex(3)
 
     def _go_next(self):
-        # "TO NEXT SEASON" (season just finished): open next year's calendar
-        # setup instead of a wizard page transition — there's no session/map to
-        # navigate to. Otherwise nextId() routes to GpMapPage on the between-GP
-        # landing, or straight to the upcoming session's page.
-        if self._wiz.season_complete:
+        # "TO NEXT SEASON" (season just finished) goes through the off-season
+        # transfer market, which then opens next year's calendar itself. In
+        # Championship mode — no roster, no career rider, no market — it still
+        # jumps straight to calendar setup. Otherwise nextId() routes to
+        # GpMapPage on the between-GP landing, or to the upcoming session's page.
+        if self._wiz.season_complete and self._wiz.mode != 'career':
             self._wiz.begin_next_season_setup()
             return
         self._wiz.next()

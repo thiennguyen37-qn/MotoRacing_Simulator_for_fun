@@ -849,6 +849,19 @@ class CalendarPage(QWizardPage):
             # the season overwrites this file with the real save anyway.
             wiz.season_year = int(data['year'])
             self._rounds = max(1, min(self._n, int(data['rounds'])))
+            if wiz.mode == 'career' and not wiz.transfers_done_for(wiz.season_year):
+                # …but the off-season market for that year hasn't been played
+                # yet — the app was closed between finishing the season and
+                # signing a contract. Land back on the Season Hub's "TO NEXT
+                # SEASON" summary, exactly where the player left off, so the
+                # market happens instead of being silently skipped. Going
+                # forward from there routes through TransfersPage as normal
+                # (SeasonHubPage.nextId).
+                wiz.season_year -= 1          # back to the season just finished
+                wiz.season_complete = True
+                self._resume = True           # validatePage: state already loaded
+                wiz.next()
+                return
             self._enter_calendar()
             return
         by_name = {str(c['circuit_name']): i

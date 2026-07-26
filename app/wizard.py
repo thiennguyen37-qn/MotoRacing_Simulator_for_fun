@@ -123,6 +123,10 @@ class MotoWizard(QWizard):
         # CalendarPage, so it skips its New/Continue menu (there's obviously
         # no season in progress for a rider that was just created).
         self.skip_calendar_menu = False
+        # A just-created rider that hasn't earned their slot yet: held in
+        # memory only until the season they're being created for actually
+        # starts — see commit_pending_career_rider.
+        self.pending_career_rider = None
 
         # Random Race weather override — None (roll the dice), 'dry', or 'wet'.
         # Set by WeatherPage (shown after Qualifying, random mode only);
@@ -679,6 +683,31 @@ class MotoWizard(QWizard):
     def clear_career_rider(self, slot=None):
         (self.career_slot_dir(slot) / 'rider.json').unlink(missing_ok=True)
 
+    def commit_pending_career_rider(self):
+        """Point of no return for a brand-new rider: write them into their slot
+        and drop whatever used to live there.
+
+        Creating a rider (CareerPage._confirm_new_rider) used to do this
+        immediately, so picking an occupied slot destroyed its rider, season
+        save and archive the moment CREATE was pressed — before the new career
+        had a single round on its calendar. Backing out to Home from calendar
+        setup then left the slot holding a rider who had never raced, with the
+        previous career gone. The rider is now kept in memory until the season
+        they were created for actually starts (CalendarPage.validatePage, right
+        before the new Season Hub opens), which is also when the slot's old
+        contents are finally cleared.
+
+        Deliberately not driven by 'is the slot occupied': a new rider must
+        also wipe a stale season save / archive out of a slot whose rider.json
+        was already gone."""
+        rider = self.pending_career_rider
+        if rider is None or self.mode != 'career':
+            return          # the slot paths below are career-only
+        self.clear_season_save()
+        self.clear_history()
+        self.save_career_rider(rider)
+        self.pending_career_rider = None
+
     def sync_rider_age(self):
         """Age the custom rider to match season_year (career only; age is
         cosmetic — shown on the Season Hub profile, not used by the sim).
@@ -698,7 +727,11 @@ class MotoWizard(QWizard):
         rather than guessed at."""
         if self.mode != 'career':
             return
-        rider = self.load_career_rider()
+        # A pending rider isn't on disk yet (commit_pending_career_rider) —
+        # age the in-memory dict, or this would load and re-save the slot's
+        # previous occupant instead.
+        pending = self.pending_career_rider is not None
+        rider = self.pending_career_rider if pending else self.load_career_rider()
         if rider is None:
             return
         age_year = rider.get('age_year')
@@ -711,7 +744,8 @@ class MotoWizard(QWizard):
         # instead would strand age_year in the future, and every season up to it
         # would then read as "no years elapsed" — freezing the age all over again.
         rider['age_year'] = int(self.season_year)
-        self.save_career_rider(rider)
+        if not pending:
+            self.save_career_rider(rider)   # a pending rider is written on commit
         if self.df is not None:
             self.df.loc[self.df['name'] == rider['name'], 'age'] = rider['age']
 
@@ -727,6 +761,20 @@ class MotoWizard(QWizard):
     def _on_page_changed(self, page_id):
         self.setButtonLayout([])
         QTimer.singleShot(0, self._sync_gap_filler)
+        # Landing back on Home or the career menu abandons a rider who was
+        # created but never got a season started — drop them here rather than in
+        # those pages, because Escape rewinds via back(), which never calls
+        # initializePage(). Left set, the rider would follow the player into
+        # whatever season they started next and overwrite that slot instead
+        # (or, in championship mode, wipe the wrong save entirely).
+        if page_id in (self.ID_HOME, self.ID_CAREER):
+            self.pending_career_rider = None
+        if page_id == self.ID_HOME:
+            # …and out of the in-memory roster too. HomePage.initializePage()
+            # already does this, but Escape rewinds via back(), which doesn't
+            # call it — so an abandoned rider used to ride along into whatever
+            # mode was picked next (a 25-rider championship).
+            self.reset_roster_to_base()
         # Back to the main soundtrack on returning home. The switch TO career
         # music happens in SeasonHubPage.initializePage() itself instead of
         # here — see play_career_music()'s docstring for why.

@@ -709,6 +709,10 @@ class CalendarPage(QWizardPage):
             # the point of no return — only now does NEW wipe the archive
             self._wiz.clear_history()
             self._new_career = False
+        # Career's equivalent: a rider created into an occupied slot only
+        # replaces its previous occupant here, one step before their Season Hub
+        # opens — not back when CREATE was pressed.
+        self._wiz.commit_pending_career_rider()
         self._wiz.save_season()        # starting fresh replaces any old save
         return True
 

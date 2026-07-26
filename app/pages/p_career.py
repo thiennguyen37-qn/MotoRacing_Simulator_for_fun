@@ -990,9 +990,11 @@ class CareerPage(QWizardPage):
 
         wiz.reset_career_progress()
         rider['age_year'] = int(wiz.season_year)   # after the reset to START_YEAR
-        wiz.clear_season_save()
-        wiz.clear_history()
-        wiz.save_career_rider(rider)
+        # Nothing on disk yet: the slot is only claimed — and its previous
+        # rider/save/archive dropped — once this rider's first season actually
+        # starts, so quitting during calendar setup leaves the old career
+        # untouched. See wizard.commit_pending_career_rider.
+        wiz.pending_career_rider = rider
         wiz.df = pd.concat([wiz.df, pd.DataFrame([rider])], ignore_index=True)
         wiz.skip_calendar_menu = True   # fresh rider -> straight into the calendar builder
         wiz.next()

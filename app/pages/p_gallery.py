@@ -654,6 +654,26 @@ class _RidersView(QWidget):
             self._warm.timeout.connect(self._prewarm_step)
             self._warm.start(30)                    # warm the rest while idle
 
+    def reload(self):
+        """Throw the cached list away and rebuild it from the wizard's current
+        grid.
+
+        populate() is deliberately one-shot, which is all the Gallery needs —
+        it always shows the same CSV roster. The Season Hub reuses this view
+        inside a career, where every transfer market moves riders between teams
+        and calls rookies up, so there the list has to be able to start over."""
+        for item in self._items.values():
+            item.setParent(None)
+            item.deleteLater()
+        for page in self._pages.values():
+            self._stack.removeWidget(page)
+            page.deleteLater()
+        self._items, self._pages, self._current = {}, {}, None
+        warm = getattr(self, '_warm', None)
+        if warm is not None:
+            warm.stop()                 # a half-finished prewarm would refill _pages
+        self.populate()
+
     def _page_for(self, name: str) -> QWidget:
         d = self._pages.get(name)
         if d is None:

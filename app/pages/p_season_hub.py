@@ -12,7 +12,8 @@ from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint, QSiz
                           pyqtSignal, QPropertyAnimation, QParallelAnimationGroup,
                           QSequentialAnimationGroup, QEasingCurve, QAbstractAnimation)
 
-from app.pages.p_gallery import STATS, _make_scroll_area, _BIKES_DIR, _BIKE_IMAGE
+from app.pages.p_gallery import (STATS, _make_scroll_area, _BIKES_DIR, _BIKE_IMAGE,
+                                  _RidersView)
 from app.pages.p_calendar import _SlotBar
 from app.pages.p_home import ExitDialog
 from app.pages.p_history import (_aggregate_riders, _build_rider_race_matrix,
@@ -3175,18 +3176,55 @@ class _StandingsScreen(_SideSubHub):
         self._manu.load(manu, lambda s: MANU_COLOR.get(str(s.get('name', '')), _DEFAULT_COLOR))
 
 
+class _RiderInfoScreen(QWidget):
+    """RIDERS entry within Season Info — the Gallery's rider browser (list on
+    the left, stats on the right), but showing THIS career's grid.
+
+    It reads wiz.df, which in a career is the slot's own roster plus the player
+    (see wizard.apply_roster_to_df), so once a transfer market has run it shows
+    the riders actually racing next season rather than the CSV line-up the
+    Gallery draws. That's also why the list is rebuilt on every load instead of
+    populated once.
+
+    Having handle_key is what tells _SideSubHub this is a self-driving view: it
+    gets added with no tint wrap, which is right — _RidersView paints its own
+    near-opaque backdrop already."""
+
+    def __init__(self, wiz):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        self._view = _RidersView(wiz)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._view)
+
+    def load(self):
+        self._view.reload()
+
+    def handle_key(self, key: int):
+        K = Qt.Key
+        if key in (K.Key_Up, K.Key_Down):
+            self._view.move_selection(key == K.Key_Down)
+            return None          # a selection move — the 'navigate' click fits
+        if key in (K.Key_Escape, K.Key_Backspace):
+            return 'close'
+        return None              # swallow the rest rather than let it fall through
+
+
 class _SeasonInfoScreen(_SideSubHub):
     """Same focus-then-open sub-hub as Your Profile: a vertical stack of tab
-    bars pinned top-left (STANDINGS / CALENDAR), Enter opens the selection
-    full-screen behind a dark tint, Escape closes it back to the tab stack.
-    STANDINGS itself opens a further Riders/Teams/Manufacturers picker."""
+    bars pinned top-left (STANDINGS / CALENDAR / RIDERS), Enter opens the
+    selection full-screen behind a dark tint, Escape closes it back to the tab
+    stack. STANDINGS itself opens a further Riders/Teams/Manufacturers picker."""
 
-    def __init__(self):
+    def __init__(self, wiz):
         self._standings = _StandingsScreen()
         self._calendar_view = _CalendarView()
+        self._rider_info = _RiderInfoScreen(wiz)
         super().__init__([
             ('STANDINGS', self._standings, False),
             ('CALENDAR', self._calendar_view, False),
+            ('RIDERS', self._rider_info, False),
         ])
 
     def load(self, riders: list, teams: list, manu: list, season_df,
@@ -3196,6 +3234,7 @@ class _SeasonInfoScreen(_SideSubHub):
         bar = self._calendar_view.scrollbar()
         if bar is not None:
             bar.setValue(0)
+        self._rider_info.load()
 
 
 # ── Between-GP map transition ─────────────────────────────────────────────────
@@ -3347,7 +3386,7 @@ class SeasonHubPage(QWizardPage):
         self._profile = _ProfileScreen()
         self._stack.addWidget(self._wrap(self._profile))         # 2
 
-        self._season_info = _SeasonInfoScreen()
+        self._season_info = _SeasonInfoScreen(self._wiz)
         self._stack.addWidget(self._wrap(self._season_info))     # 3
 
         # Only the intro plays video; once it's done the hub/profile/season

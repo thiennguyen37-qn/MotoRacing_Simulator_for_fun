@@ -83,7 +83,7 @@ class ChampionshipPage(QWizardPage):
 
         layout = QVBoxLayout(self)
 
-        # Control row — next round / finish
+        # Control row — next round / finish, pushed to the far right
         ctrl = QHBoxLayout()
         self._btn_next = QPushButton('')
         self._btn_next.setFixedHeight(34)
@@ -94,15 +94,15 @@ class ChampionshipPage(QWizardPage):
         self._btn_next.clicked.connect(self._on_next_clicked)
         # second action, shown only once the season is over: finish -> home
         # (while _btn_next becomes "Next Season" -> back to the calendar)
-        self._btn_finish = QPushButton('Finish Championship')
+        self._btn_finish = QPushButton('Finish Championship  →')
         self._btn_finish.setFixedHeight(34)
         self._btn_finish.setAutoDefault(False)
         self._btn_finish.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_finish.clicked.connect(self._finish_clicked)
         self._btn_finish.setVisible(False)
+        ctrl.addStretch(1)
         ctrl.addWidget(self._btn_next)
         ctrl.addWidget(self._btn_finish)
-        ctrl.addStretch(1)
         layout.addLayout(ctrl)
 
         self._tabs = QTabWidget()
@@ -137,23 +137,23 @@ class ChampionshipPage(QWizardPage):
             if idx < n - 1:
                 # Career runs the weekend from the Season Hub, so this button
                 # just closes the grand prix and drops back there — hence a
-                # plain "Finish" (no icon, no round counter). Championship
-                # walks straight into the next round, so it keeps the counter.
-                self._btn_next.setText('Finish' if wiz.mode == 'career'
-                                       else f'▶  Next Round ({idx + 2}/{n})')
+                # plain "Finish" (no round counter). Championship walks straight
+                # into the next round, so it keeps the counter.
+                self._btn_next.setText('Finish  →' if wiz.mode == 'career'
+                                       else f'Next Round ({idx + 2}/{n})  →')
                 self._btn_finish.setVisible(False)
             elif wiz.mode == 'career':
                 # Season finale mirrors a normal round: one plain "Finish" that
                 # drops back to the Career Hub, whose "TO NEXT SEASON" card then
                 # opens next year's setup (no separate "Next Season"/"Finish
                 # Championship" here — the hub's Main Menu tab / Esc exits home).
-                self._btn_next.setText('Finish')
+                self._btn_next.setText('Finish  →')
                 self._btn_finish.setVisible(False)
             else:
-                self._btn_next.setText('▶  Next Season')
+                self._btn_next.setText('Next Season  →')
                 self._btn_finish.setVisible(True)
         else:
-            self._btn_next.setText('🏁  Finish')
+            self._btn_next.setText('Finish  →')
             self._btn_finish.setVisible(False)
 
         self._compute()

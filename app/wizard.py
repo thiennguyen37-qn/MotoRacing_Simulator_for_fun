@@ -1,6 +1,9 @@
 import json
+import random
 import sys
 from pathlib import Path
+
+import pandas as pd
 from PyQt6.QtWidgets import QWizard, QApplication, QDialog, QWidget
 from PyQt6.QtGui import QPainter, QColor
 from PyQt6.QtCore import Qt, QEvent, QTimer
@@ -77,7 +80,16 @@ class MotoWizard(QWizard):
 
         # Data
         self.df          = load_riders(RAW)
-        self._base_rider_count = len(self.df)   # 24 base riders, before any Career rider is appended
+        # The untouched CSV grid. self.df drifts away from it — a Career rider is
+        # appended to it, and from the transfer market on, a career's own roster
+        # replaces it entirely (see apply_roster_to_df) — so the pristine copy is
+        # kept here for reset_roster_to_base to restore.
+        self._base_df    = self.df.copy()
+        # How many rows at the head of self.df are the AI grid (everything after
+        # them is the Career rider). Re-stamped by reset_roster_to_base and
+        # apply_roster_to_df rather than fixed at 24, because a career's roster
+        # is what defines the AI grid once one exists.
+        self._base_rider_count = len(self.df)
         self.circuits_df = load_circuits(RAW)
 
         # Mode state
@@ -705,8 +717,13 @@ class MotoWizard(QWizard):
             return          # the slot paths below are career-only
         self.clear_season_save()
         self.clear_history()
+        self.clear_roster()
         self.save_career_rider(rider)
         self.pending_career_rider = None
+        # The career's own copy of the AI grid starts life here as a snapshot of
+        # the CSV; from its first transfer market on it diverges for good. Built
+        # alongside the other slot files so a career always has one.
+        self.apply_roster_to_df(self.ensure_roster(self.season_year))
 
     def sync_rider_age(self):
         """Age the custom rider to match season_year (career only; age is
@@ -754,9 +771,101 @@ class MotoWizard(QWizard):
         or None for an empty one — feeds the New/Load slot picker."""
         return [self.load_career_rider(slot=i) for i in range(CAREER_SLOTS)]
 
+    # ── Career roster (the AI grid, per slot) ─────────────────────────────────
+    # The 24 AI riders used to come straight from data/raw every launch and were
+    # never saved, so nothing about them could change. The transfer market moves
+    # riders between teams, retires them and calls rookies up from the pool —
+    # none of which survives a restart unless the grid itself is persisted. That
+    # is what roster.json is: a career's own copy of the grid, replacing the CSV
+    # from the moment the career starts. See transfer_market.md.
+
+    def roster_path(self):
+        return self.career_slot_dir() / 'roster.json'
+
+    def build_initial_roster(self, year):
+        """A fresh career's roster: the CSV grid, plus a contract for everyone.
+
+        Contracts run 1-2 seasons, assigned at random so they don't all expire in
+        the same off-season — a grid where every seat opens at once would churn
+        in waves instead of a steady trickle. `contract_until` is the last season
+        the deal covers (inclusive), so a rider is a free agent in the Y -> Y+1
+        off-season when `contract_until <= Y`."""
+        year = int(year)
+        riders = []
+        for rec in load_riders(RAW).to_dict('records'):
+            # to_dict() hands back numpy scalars, which json can't serialise —
+            # and json.dumps(default=int) would silently truncate the float
+            # ratings, so unwrap them here instead.
+            rider = {k: (v.item() if hasattr(v, 'item') else v) for k, v in rec.items()}
+            rider['contract_until'] = year + random.choice((0, 1))
+            riders.append(rider)
+        return {'year': year, 'riders': riders, 'retired': [], 'pool_used': []}
+
+    def load_roster(self):
+        """Return the slot's roster dict, or None if absent/corrupt."""
+        path = self.roster_path()
+        if not path.exists():
+            return None
+        try:
+            roster = json.loads(path.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, OSError):
+            return None
+        return roster if roster.get('riders') else None
+
+    def save_roster(self, roster):
+        self.roster_path().write_text(json.dumps(roster, indent=1), encoding='utf-8')
+
+    def clear_roster(self):
+        self.roster_path().unlink(missing_ok=True)
+
+    def ensure_roster(self, year=None):
+        """The slot's roster, created from the CSV grid if it doesn't have one.
+
+        The fallback exists for careers started before roster.json did; a career
+        created now gets its roster at the same moment it claims its slot (see
+        commit_pending_career_rider). `year` is read from the season save when
+        not supplied, because on the load path self.season_year is still whatever
+        the previous career left it at — CalendarPage only restores it a moment
+        later, and contract lengths would hang off the wrong season."""
+        roster = self.load_roster()
+        if roster is not None:
+            return roster
+        if year is None:
+            year = (self.load_season_save() or {}).get('year', self.season_year)
+        roster = self.build_initial_roster(year)
+        self.save_roster(roster)
+        return roster
+
+    def apply_roster_to_df(self, roster=None):
+        """Rebuild self.df from a career's roster, then append the Career rider.
+
+        Keeps the invariant every caller of _base_rider_count relies on: the AI
+        grid occupies the head of the frame and the player is last."""
+        if roster is None:
+            roster = self.load_roster()
+        if roster is None:
+            self.reset_roster_to_base()
+            return
+        # Only the simulation columns — contract_until lives in roster.json and
+        # is the transfer market's business, not the race engine's.
+        ai = pd.DataFrame(roster['riders'])[self._base_df.columns]
+        self.df = ai.reset_index(drop=True)
+        self._base_rider_count = len(self.df)
+        # A rider mid-creation isn't on disk yet (commit_pending_career_rider).
+        rider = self.pending_career_rider or self.load_career_rider()
+        if rider is not None:
+            self.df = pd.concat([self.df, pd.DataFrame([rider])], ignore_index=True)
+
     def reset_roster_to_base(self):
-        """Drop any previously-appended Career rider, back to the 24 base riders."""
-        self.df = self.df.iloc[:self._base_rider_count].reset_index(drop=True)
+        """Back to the untouched CSV grid, dropping any Career rider.
+
+        Restores from _base_df rather than slicing self.df, because self.df may
+        be holding a career's own roster (transferred teams, rookies, retirements
+        — see apply_roster_to_df). Slicing would leave that career's grid in
+        place for whatever mode was picked next; Championship and Random Race
+        both expect the base CSV."""
+        self.df = self._base_df.copy()
+        self._base_rider_count = len(self.df)
 
     def _on_page_changed(self, page_id):
         self.setButtonLayout([])
@@ -769,11 +878,16 @@ class MotoWizard(QWizard):
         # (or, in championship mode, wipe the wrong save entirely).
         if page_id in (self.ID_HOME, self.ID_CAREER):
             self.pending_career_rider = None
-        if page_id == self.ID_HOME:
             # …and out of the in-memory roster too. HomePage.initializePage()
             # already does this, but Escape rewinds via back(), which doesn't
             # call it — so an abandoned rider used to ride along into whatever
             # mode was picked next (a 25-rider championship).
+            #
+            # The career menu needs it as much as Home now that self.df can hold
+            # a slot's own roster: loading a career, backing out, then creating a
+            # rider in a different slot would otherwise check its bike number and
+            # name against the *other* career's grid (see p_career._taken_numbers
+            # / _is_valid_name, both of which read the head of self.df).
             self.reset_roster_to_base()
         # Back to the main soundtrack on returning home. The switch TO career
         # music happens in SeasonHubPage.initializePage() itself instead of

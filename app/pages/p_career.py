@@ -859,9 +859,14 @@ class CareerPage(QWizardPage):
         self._start_new_rider()
 
     def _load_selected_rider(self, rider: dict):
+        """Load the slot's grid, not the CSV one — a career several seasons in
+        has its own transfers, retirements and called-up rookies (see
+        wizard.apply_roster_to_df). `rider` is re-read from the slot by that
+        call, which also re-appends them as the last row. ensure_roster() covers
+        a career started before roster.json existed by snapshotting the CSV
+        grid once, so such a slot still loads."""
         wiz = self._wiz
-        wiz.reset_roster_to_base()
-        wiz.df = pd.concat([wiz.df, pd.DataFrame([rider])], ignore_index=True)
+        wiz.apply_roster_to_df(wiz.ensure_roster())
         wiz.next()
 
     def _name_edit_key(self, key: int) -> bool:

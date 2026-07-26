@@ -2970,9 +2970,10 @@ class _StandingsListView(QWidget):
 def _build_riders_detail_table(standings: list, rounds_detail: list):
     """Wiki-style race-by-race grid for the CURRENT season's riders, ordered
     by the standings passed in — POS / RIDER / R1…Rn (coloured by finishing
-    position, 'Ret' for DNF) / PTS. Mirrors championship mode's own Results
-    grid (p4_championship._fill_results) and career's cross-season race
-    matrix (_build_rider_race_matrix), but scoped to just this season.
+    position, 'Ret' for DNF) / PTS. Mirrors career's cross-season race matrix
+    (_build_rider_race_matrix), but scoped to just this season. (The Standings
+    page used to carry an equivalent grid of its own; this is now the only one
+    for the running season.)
 
     Only the R1…Rn cells carry the per-position colour coding — POS/RIDER/PTS
     stay on the plain neutral background (no team/manufacturer tint), same

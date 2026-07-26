@@ -7,6 +7,7 @@ from PyQt6.QtCore import (Qt, QTimer, QVariantAnimation, QEasingCurve,
                            QRect, QRectF, QPropertyAnimation, pyqtProperty)
 
 from src.simulator import run_race
+from src.engine import fmt_lap
 from src import progression
 from PyQt6.QtWidgets import QHeaderView
 from app.widgets.table_utils import (make_table, TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR,
@@ -261,6 +262,42 @@ class ProgressionPanel(QDialog):
             super().keyPressEvent(event)
 
 
+class _RaceBanner(QLabel):
+    """Centred 'winner · fastest lap' strip above a race classification.
+
+    Keeps its height while empty so the table doesn't shift down when the
+    result lands (it is only filled once the reveal has finished, otherwise the
+    banner would spoil the winner the tables are still working towards)."""
+
+    def __init__(self):
+        super().__init__('')
+        self.setFixedHeight(44)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self.setStyleSheet("QLabel { background: transparent; border: none;"
+                           " font-family: 'Segoe UI'; font-size: 13px; }")
+
+    def clear_result(self):
+        self.setText('')
+
+    def show_result(self, winner: str, fl_name: str | None, fl_time: float | None):
+        parts = [self._entry('WINNER', winner)]
+        if fl_name:
+            lap = (f"&nbsp;&nbsp;<span style=\"font-family:Consolas;"
+                   f" color:#c0c0d4;\">{fmt_lap(fl_time)}</span>"
+                   if fl_time is not None else '')
+            parts.append(self._entry('FL', fl_name) + lap)
+        sep = ('&nbsp;&nbsp;&nbsp;<span style="color:#3a3a4a;">|</span>'
+               '&nbsp;&nbsp;&nbsp;')
+        self.setText(sep.join(parts))
+
+    @staticmethod
+    def _entry(label: str, value: str) -> str:
+        return (f'<span style="color:#8a8aa2; letter-spacing:1px;">{label}</span>'
+                f'&nbsp;&nbsp;<span style="color:#f0f0f8; font-weight:600;">'
+                f'{str(value).upper()}</span>')
+
+
 class RacePage(QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -272,8 +309,8 @@ class RacePage(QWizardPage):
         self._career_session_done = False
         self._reveal_timers: dict[int, list] = {}   # table-id → pending QTimers
         self._reveal_anims:  dict[int, list] = {}    # table-id → running animations
-        self.setTitle('Race Weekend')
-        self.setSubTitle('Two races on the same grid. Each race has an independent weather roll.')
+        # No page title/subtitle and no status line — the classification tables
+        # are the whole page, so nothing sits above the standings.
 
         layout = QVBoxLayout(self)
 
@@ -291,23 +328,45 @@ class RacePage(QWizardPage):
         self._btn_r2.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_r2.setEnabled(False)
         self._btn_r2.clicked.connect(lambda: self._run(2))
-        self._status = QLabel('')
         ctrl.addWidget(self._btn_r1)
         ctrl.addWidget(self._btn_r2)
-        ctrl.addWidget(self._status, 1)
+        ctrl.addStretch(1)
         layout.addLayout(ctrl)
 
         self._tabs = QTabWidget()
         self._tabs.setStyleSheet(SESSION_TABS_SS)
         self._t_r1 = make_table(HEADERS)
         self._t_r2 = make_table(HEADERS)
-        self._tabs.addTab(self._t_r1, 'Race 1')
-        self._tabs.addTab(self._t_r2, 'Race 2')
+        # Winner + fastest lap sit inside their own race's tab (rather than once
+        # above the tab bar) so switching tabs always shows that race's banner.
+        # Filled only when the reveal ends — see _on_reveal_done.
+        self._lbl_r1 = _RaceBanner()
+        self._lbl_r2 = _RaceBanner()
+        self._tabs.addTab(self._wrap(self._lbl_r1, self._t_r1), 'Race 1')
+        self._tabs.addTab(self._wrap(self._lbl_r2, self._t_r2), 'Race 2')
         layout.addWidget(self._tabs)
+
+    @staticmethod
+    def _wrap(banner, table) -> QWidget:
+        """Tab page = centred winner/FL banner above the classification."""
+        page = QWidget()
+        lay  = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(banner)
+        lay.addWidget(table)
+        return page
+
+    def _banner(self, race_num):
+        return self._lbl_r1 if race_num == 1 else self._lbl_r2
+
+    def _table(self, race_num):
+        return self._t_r1 if race_num == 1 else self._t_r2
 
     def handle_key(self, key: int) -> bool:
         if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-            bar = self._tabs.currentWidget().verticalScrollBar()
+            # currentWidget() is the wrapper page, so scroll the table itself
+            bar = self._table(self._tabs.currentIndex() + 1).verticalScrollBar()
             bar.setValue(bar.value() + (bar.singleStep() if key == Qt.Key.Key_Down else -bar.singleStep()))
             self._wiz.suppress_next_sfx = True   # scrolling, not navigation — no SFX
             return True
@@ -346,9 +405,10 @@ class RacePage(QWizardPage):
         self._btn_r2.setVisible(True)
         self._btn_r2.setEnabled(False)
         self._btn_r2.setText('▶  Run Race 2')
-        self._status.setText('')
         self._t_r1.setRowCount(0)
         self._t_r2.setRowCount(0)
+        self._lbl_r1.clear_result()
+        self._lbl_r2.clear_result()
         self._wiz.race_pts     = []
         self._wiz.race_results = []
         self._tabs.setCurrentIndex(0)
@@ -372,13 +432,14 @@ class RacePage(QWizardPage):
         self._career_session_done = False
         self._stop_reveal(self._t_r1)
         self._stop_reveal(self._t_r2)
-        self._status.setText('')
         if self._wiz.session_index <= 3:
             # Race 1 excursion — reset the round's race state.
             self._r1_done   = False
             self._both_done = False
             self._t_r1.setRowCount(0)
             self._t_r2.setRowCount(0)
+            self._lbl_r1.clear_result()
+            self._lbl_r2.clear_result()
             self._wiz.race_pts     = []
             self._wiz.race_results = []
             self._tabs.setCurrentIndex(0)
@@ -390,6 +451,7 @@ class RacePage(QWizardPage):
             self._r1_done   = True
             self._both_done = False
             self._t_r2.setRowCount(0)
+            self._lbl_r2.clear_result()      # Race 1's banner stays as it was
             self._tabs.setCurrentIndex(1)
             self.completeChanged.emit()
             self._run(2)
@@ -399,7 +461,6 @@ class RacePage(QWizardPage):
             self._btn_r1.setEnabled(False)
         else:
             self._btn_r2.setEnabled(False)
-        self._status.setText(f'Running Race {race_num}…')
 
         # forced_weather: Random Race takes its override from WeatherPage;
         # Career instead reuses the Season Hub's already-rolled forecast for
@@ -424,14 +485,13 @@ class RacePage(QWizardPage):
         if meta['fl_name'] is not None:
             self._wiz.race_fastest_laps.append((meta['fl_time'], meta['fl_name']))
 
-        table = self._t_r1 if race_num == 1 else self._t_r2
+        table = self._table(race_num)
+        self._banner(race_num).clear_result()   # no spoiler while rows drop in
         reveal = _fill(table, result_df, meta)
         self._tabs.setCurrentIndex(race_num - 1)
 
         # Reveal the classification row-by-row, spacing each finisher by the gap
-        # to the one ahead; winner/FL are announced only once the reveal ends so
-        # it isn't spoiled up front.
-        self._status.setText(f'Race {race_num} — revealing results…')
+        # to the one ahead.
         self._start_reveal(
             table, reveal,
             lambda: self._on_reveal_done(race_num, result_df, meta),
@@ -496,14 +556,9 @@ class RacePage(QWizardPage):
         self._reveal_anims[tid]  = []
 
     def _on_reveal_done(self, race_num, result_df, meta):
-        weather = 'WET 🌧' if meta['is_wet'] else 'DRY ☀'
-        winner  = result_df.iloc[0]['name']
-        fl      = meta['fl_name']
-        career  = self._wiz.mode == 'career'
-        tail    = '   ·   Enter → hub' if (career and race_num == 1) else ''
-        self._status.setText(
-            f"✓ Race {race_num}  {weather}  |  Winner: {winner}  |  FL: {fl}{tail}"
-        )
+        career = self._wiz.mode == 'career'
+        self._banner(race_num).show_result(
+            str(result_df.iloc[0]['name']), meta['fl_name'], meta['fl_time'])
         if race_num == 1:
             self._r1_done = True
             if career:

@@ -632,7 +632,8 @@ class MotoWizard(QWizard):
 
     def save_next_season_marker(self):
         """After a season ends, remember that the career continues: the next
-        launch's CONTINUE opens the calendar for the following year."""
+        launch opens the calendar for the following year (career loads its slot
+        straight into it; championship offers it as CONTINUE)."""
         rounds = len(self.season_df) if self.season_df is not None else len(self.circuits_df)
         data = {'season_complete': True,
                 'year': self.season_year + 1,

@@ -189,9 +189,6 @@ class _MenuBar(QFrame):
         lay.addWidget(self._sub)
         self.set_state(False, True)
 
-    def set_title(self, text: str):
-        self._ttl.setText(text)
-
     def set_sub(self, text: str):
         self._sub.setText(text)
 
@@ -387,6 +384,16 @@ class CalendarPage(QWizardPage):
         cal_w.setStyleSheet('background: transparent;')
         self._pages.addWidget(cal_w)
 
+        # ── Page 2: nothing at all ────────────────────────────────────────────
+        # Career resumes without asking anything (see initializePage), and the
+        # jump to the Season Hub is deferred by one event-loop tick — this page
+        # is what that tick shows, so neither the menu nor a stale calendar
+        # flashes on the way through.
+        blank = QWidget()
+        blank.setStyleSheet('background: transparent;')
+        self._pages.addWidget(blank)
+        self._blank_index = self._pages.indexOf(blank)
+
         root = QVBoxLayout(cal_w)
         root.setContentsMargins(36, 24, 36, 24)
         root.setSpacing(0)
@@ -557,7 +564,8 @@ class CalendarPage(QWizardPage):
     # ── Wizard flow ───────────────────────────────────────────────────────────
 
     def initializePage(self):
-        """Entered from Home: show the New / Continue menu."""
+        """Entered from Home (championship): show the New / Continue menu.
+        Career skips the menu entirely — see _init_career below."""
         self._resume = False
         self._new_career = False
         if getattr(self._wiz, 'skip_calendar_menu', False):
@@ -567,13 +575,12 @@ class CalendarPage(QWizardPage):
             self._wiz.skip_calendar_menu = False
             self._enter_calendar()
             return
-        if self._wiz.mode == 'career':
-            self._mb_new.set_title('NEW CAREER SEASON')
-            self._mb_new.set_sub('Fresh season for this career — keeps the rider, resets the season history')
-        else:
-            self._mb_new.set_title('NEW CHAMPIONSHIP')
-            self._mb_new.set_sub('Fresh career from 2026 — resets the championship history')
         self._save = self._wiz.load_season_save()
+        if self._wiz.mode == 'career':
+            self._init_career()
+            return
+        # NEW's wording is fixed now that career never shows this menu — see
+        # the _MenuBar built in __init__.
         if self._save and self._save.get('season_complete'):
             self._mb_cont.set_sub(
                 f"Start the {self._save['year']} season — set up the calendar")
@@ -588,6 +595,36 @@ class CalendarPage(QWizardPage):
         self._close_picker()
         self._pages.setCurrentIndex(0)
         self.completeChanged.emit()
+
+    def _init_career(self):
+        """Career has no New/Continue choice: a slot holds exactly one career,
+        so loading it can only mean "carry on with it" — there is nothing to
+        pick between. Resume the save (an in-progress round, or a finished
+        season's calendar setup for the following year, both handled by
+        _resume_season), and if the slot has no season save at all — a rider
+        created but never taken through calendar setup — build the calendar for
+        a first season instead.
+
+        The resume is deferred by a tick: _resume_season ends in wiz.next(),
+        which must not run inside the page change that is still initialising
+        this page."""
+        self._close_picker()
+        if not self._save:
+            # Same footing as a brand-new rider: back to START_YEAR with no
+            # in-memory state left over from another slot's career.
+            self._wiz.reset_career_progress()
+            self._rounds = self._n
+            self._enter_calendar()
+            return
+        self._pages.setCurrentIndex(self._blank_index)
+        self.completeChanged.emit()
+        QTimer.singleShot(0, self._auto_resume)
+
+    def _auto_resume(self):
+        # Only the page the wizard is actually on may navigate — a tick that
+        # lands after the player has left must not drag them forward.
+        if self._wiz.currentPage() is self:
+            self._resume_season()
 
     def _update_menu_styles(self):
         self._mb_new.set_state(self._menu_focus == 'new', True)
@@ -683,6 +720,8 @@ class CalendarPage(QWizardPage):
     # ── Keyboard ──────────────────────────────────────────────────────────────
 
     def handle_key(self, key: int) -> bool:
+        if self._pages.currentIndex() == self._blank_index:
+            return True     # career resume in flight — swallow the tick's keys
         if self._pages.currentIndex() == 0:
             return self._menu_key(key)
         if self._picker_open:
@@ -815,6 +854,11 @@ class CalendarPage(QWizardPage):
         except KeyError:            # circuit renamed/removed -> save unusable
             wiz.clear_season_save()
             self._save = None
+            if wiz.mode == 'career':
+                # no menu to fall back on in career (see _init_career) — set up
+                # a calendar for this year instead of dead-ending on a blank page
+                self._enter_calendar()
+                return
             self._menu_focus = 'new'
             self._update_menu_styles()
             return

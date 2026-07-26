@@ -377,15 +377,9 @@ class MotoWizard(QWizard):
         Hub's "TO NEXT SEASON" card."""
         self.season_complete = False
         self.season_year  += 1
-        # Career only: the custom rider ages one year per season (age is
-        # cosmetic — shown on the Season Hub profile, not used by the sim).
-        if self.mode == 'career':
-            rider = self.load_career_rider()
-            if rider is not None:
-                rider['age'] = int(rider.get('age', 0)) + 1
-                self.save_career_rider(rider)
-                if self.df is not None:
-                    self.df.loc[self.df['name'] == rider['name'], 'age'] = rider['age']
+        # The rider's birthday rides on season_year via sync_rider_age(), called
+        # from _enter_calendar() — the one funnel every path into a new season
+        # goes through, this one included (begin_followup_season below).
         self.circuit_index = 0
         self.all_race_pts  = []
         self.race_pts      = []
@@ -683,6 +677,42 @@ class MotoWizard(QWizard):
 
     def clear_career_rider(self, slot=None):
         (self.career_slot_dir(slot) / 'rider.json').unlink(missing_ok=True)
+
+    def sync_rider_age(self):
+        """Age the custom rider to match season_year (career only; age is
+        cosmetic — shown on the Season Hub profile, not used by the sim).
+
+        Driven by the rider's own 'age_year' — the season the stored age is
+        valid FOR — rather than by a bare +1, so this is idempotent: calling it
+        twice for the same season is a no-op. That matters because entering
+        calendar setup is re-runnable (CalendarPage._resume_season keeps the
+        season-complete marker on disk, so backing out to Home and picking
+        CONTINUE again re-enters it), and because a bare increment sitting on
+        one of the two paths into a new season is exactly how the rider stopped
+        ageing at all — see _enter_calendar, the single place this is called.
+
+        A rider saved before 'age_year' existed is stamped at the current year
+        without changing their age: how many of the missed birthdays they
+        should get back isn't recoverable from the save, so it's left alone
+        rather than guessed at."""
+        if self.mode != 'career':
+            return
+        rider = self.load_career_rider()
+        if rider is None:
+            return
+        age_year = rider.get('age_year')
+        if age_year is not None:
+            years = int(self.season_year) - int(age_year)
+            if years > 0:
+                rider['age'] = int(rider.get('age', 0)) + years
+        # Restamped even when no birthday was due (same season re-entered, or a
+        # career reset putting season_year back to START_YEAR). Returning early
+        # instead would strand age_year in the future, and every season up to it
+        # would then read as "no years elapsed" — freezing the age all over again.
+        rider['age_year'] = int(self.season_year)
+        self.save_career_rider(rider)
+        if self.df is not None:
+            self.df.loc[self.df['name'] == rider['name'], 'age'] = rider['age']
 
     def list_career_slots(self):
         """Return CAREER_SLOTS entries: the saved rider dict for each slot,

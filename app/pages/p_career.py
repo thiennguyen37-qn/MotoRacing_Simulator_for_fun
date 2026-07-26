@@ -989,6 +989,7 @@ class CareerPage(QWizardPage):
         }
 
         wiz.reset_career_progress()
+        rider['age_year'] = int(wiz.season_year)   # after the reset to START_YEAR
         wiz.clear_season_save()
         wiz.clear_history()
         wiz.save_career_rider(rider)

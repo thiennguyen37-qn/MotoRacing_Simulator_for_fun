@@ -636,6 +636,14 @@ class CalendarPage(QWizardPage):
         wiz.grid_all_df        = None
         wiz.weekend_weather    = None
         wiz.gp_recap_dismissed_for = None
+        # Every route into a new season funnels through here — the hub's "TO
+        # NEXT SEASON" card (via begin_next_season_setup/begin_followup_season)
+        # AND CONTINUE picking up a season-complete marker after a restart
+        # (_resume_season). The rider's birthday hangs off this call for that
+        # reason: it used to sit inside begin_next_season_setup(), so a career
+        # advanced via Home -> CONTINUE — which never touches that method —
+        # aged the season but never the rider.
+        wiz.sync_rider_age()
         self._assign = [None] * self._n
         for bar in self._slots:
             bar.set_circuit(None)

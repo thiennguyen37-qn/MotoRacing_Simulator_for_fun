@@ -1,5 +1,4 @@
-from PyQt6.QtWidgets import QWizardPage, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
-from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import QWizardPage, QVBoxLayout, QHBoxLayout, QPushButton
 from PyQt6.QtCore import Qt
 
 from src.simulator import run_practice
@@ -14,8 +13,8 @@ class PracticePage(QWizardPage):
         super().__init__()
         self._wiz  = wiz
         self._done = False
-        self.setTitle('Practice Session')
-        self.setSubTitle('Simulate the free practice session.')
+        # No page title/subtitle and no status line — the classification table
+        # is the whole page, so nothing sits above the standings.
 
         layout = QVBoxLayout(self)
 
@@ -27,9 +26,8 @@ class PracticePage(QWizardPage):
         self._btn.setAutoDefault(False)
         self._btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn.clicked.connect(self._run)
-        self._status = QLabel('')
         ctrl.addWidget(self._btn)
-        ctrl.addWidget(self._status, 1)
+        ctrl.addStretch(1)
         layout.addLayout(ctrl)
 
         self._table = make_table(HEADERS)
@@ -65,17 +63,10 @@ class PracticePage(QWizardPage):
             wiz.race_pts          = []
             wiz.race_results      = []
             wiz.race_fastest_laps = []
-            n = len(season)
-            label = 'World Championship' if wiz.mode == 'championship' else 'Career Season'
-            self.setSubTitle(f"{wiz.season_year} {label}  ·  "
-                             f"Round {idx + 1}/{n}  —  {wiz.circuit['circuit_name']}  ({wiz.circuit['country']})")
-        else:
-            self.setSubTitle('Simulate the free practice session.')
 
         self._done = False
         self._btn.setEnabled(True)
         self._btn.setText('▶  Run Practice Session')
-        self._status.setText('')
         self._table.setRowCount(0)
         self.completeChanged.emit()
 
@@ -90,8 +81,6 @@ class PracticePage(QWizardPage):
 
     def _run(self):
         self._btn.setEnabled(False)
-        self._status.setText('Simulating…')
-        QWizardPage.update(self)
 
         c = self._wiz.circuit
         res = run_practice(self._wiz.df, c, is_wet=self._wiz.session_is_wet())
@@ -106,9 +95,6 @@ class PracticePage(QWizardPage):
             ])
         fill_table(self._table, rows)
 
-        self._status.setText(
-            f"✓  P1: {res.iloc[0]['name']}  —  {res.iloc[0]['best_lap']}"
-        )
         self._done = True
         self.completeChanged.emit()
 

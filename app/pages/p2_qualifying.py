@@ -1,6 +1,5 @@
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
-                              QPushButton, QLabel, QTabWidget, QWidget)
-from PyQt6.QtGui import QFont
+                              QPushButton, QTabWidget, QWidget)
 from PyQt6.QtCore import Qt
 
 from src.simulator import run_qualifying
@@ -21,8 +20,8 @@ class QualifyingPage(QWizardPage):
         # session for the *current* excursion is done, so Enter returns to the
         # hub instead of running the other session.
         self._career_session_done = False
-        self.setTitle('Qualifying Session')
-        self.setSubTitle('Q1 → top 2 advance to Q2. Q2 sets the starting grid (P1–P12).')
+        # No page title/subtitle and no status line — the session tables are the
+        # whole page, so nothing sits above the standings.
 
         layout = QVBoxLayout(self)
 
@@ -41,10 +40,9 @@ class QualifyingPage(QWizardPage):
         self._btn_q2.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_q2.setEnabled(False)
         self._btn_q2.clicked.connect(self._run_q2)
-        self._status = QLabel('')
         ctrl.addWidget(self._btn_q1)
         ctrl.addWidget(self._btn_q2)
-        ctrl.addWidget(self._status, 1)
+        ctrl.addStretch(1)
         layout.addLayout(ctrl)
 
         # Tab widget
@@ -101,7 +99,6 @@ class QualifyingPage(QWizardPage):
         self._btn_q2.setVisible(True)
         self._btn_q2.setEnabled(False)
         self._btn_q2.setText('▶  Run Q2')
-        self._status.setText('')
         for t in (self._t_q1, self._t_q2, self._t_gr):
             t.setRowCount(0)
         self._wiz.grid_all_df = None
@@ -124,7 +121,6 @@ class QualifyingPage(QWizardPage):
         self._btn_q2.setVisible(False)
         self._btn_q2.setEnabled(False)
         self._career_session_done = False
-        self._status.setText('')
         if self._wiz.session_index <= 1:
             # Qualifying 1 excursion — a fresh session.
             self._q1_done = False
@@ -162,7 +158,6 @@ class QualifyingPage(QWizardPage):
 
     def _run_q1(self):
         self._btn_q1.setEnabled(False)
-        self._status.setText('Running Q1…')
         q1, q2, adv, nq, grid = run_qualifying(
             self._wiz.df, self._wiz.circuit, self._wiz.practice_results,
             is_wet=self._wiz.session_is_wet()
@@ -182,16 +177,13 @@ class QualifyingPage(QWizardPage):
             # Q1 is its own hub session — don't roll straight into Q2; Enter
             # now returns to the hub, where Qualifying 2 becomes next up.
             self._career_session_done = True
-            self._status.setText(f"Q1 done. Advancing: {', '.join(adv)}   ·   Enter → hub")
             self.completeChanged.emit()
         else:
             self._btn_q2.setEnabled(True)
-            self._status.setText(f"Q1 done. Advancing: {', '.join(adv)}")
         self._tabs.setCurrentIndex(0)
 
     def _run_q2(self):
         self._btn_q2.setEnabled(False)
-        self._status.setText('Running Q2…')
 
         q2   = self._q2_class
         nq   = self._q1_nq
@@ -224,9 +216,6 @@ class QualifyingPage(QWizardPage):
         self._q2_done = True
         if self._wiz.mode == 'career':
             self._career_session_done = True
-        pole = q2.iloc[0]['name']
-        tail = '   ·   Enter → hub' if self._wiz.mode == 'career' else ''
-        self._status.setText(f"✓  POLE: {pole}  —  {q2.iloc[0]['best_lap']}{tail}")
         self._tabs.setCurrentIndex(2)
         self.completeChanged.emit()
 

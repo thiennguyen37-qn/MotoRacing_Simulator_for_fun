@@ -2231,14 +2231,20 @@ class _UpcomingSessionPanel(QWidget):
 
     def load(self, session_name: str, weather: str = '—',
              temperature: str = '—', humidity: str = '—',
-             next_gp_country: str | None = None, champion: str | None = None):
+             next_gp_country: str | None = None, champion: str | None = None,
+             champion_year: int | str | None = None):
         if champion:
             # Season finale: crown the champion in place of the flag/GP-name
             # (reuse the centred nextgp box, flag hidden — the off-season has no
-            # country to show).
+            # country to show). Rich text so the "World Champion" line can run
+            # smaller than the champion's name.
             self._card_title.setText('SEASON COMPLETE')
             self._flag_lbl.setVisible(False)
-            self._gp_name_lbl.setText(f'🏆  {str(champion).upper()}\nSEASON CHAMPION')
+            year_txt = str(champion_year) if champion_year else ''
+            self._gp_name_lbl.setText(
+                f'<div style="font-size:16pt; font-weight:600;">{str(champion).upper()}</div>'
+                f'<div style="font-size:11pt; font-weight:400;">{year_txt} WORLD CHAMPION</div>'
+            )
             self._session_box.setVisible(False)
             self._nextgp_box.setVisible(True)
         elif next_gp_country:
@@ -2856,7 +2862,7 @@ class _HubDashboard(QWidget):
             upcoming_session: str = '', favourites: list | None = None,
             weather: dict | None = None, next_gp_country: str | None = None,
             gp_result: list | None = None, result_title: str | None = None,
-            champion: str | None = None):
+            champion: str | None = None, champion_year: int | str | None = None):
         self._standings.load(standings, team_standings, manu_standings)
         self._form.load(races)
         self._overall_stats.load(honours, names_map)
@@ -2871,7 +2877,8 @@ class _HubDashboard(QWidget):
         self._upcoming.load(upcoming_session, weather=weather.get('label', '—'),
                             temperature=f"{weather['temp']}°C" if 'temp' in weather else '—',
                             humidity=f"{weather['humidity']}%" if 'humidity' in weather else '—',
-                            next_gp_country=next_gp_country, champion=champion)
+                            next_gp_country=next_gp_country, champion=champion,
+                            champion_year=champion_year)
         self._favourites.load(favourites=favourites, gp_result=gp_result,
                               result_title=result_title)
         # Rows are in place now — match the Standings card's height on the next
@@ -3584,11 +3591,13 @@ class SeasonHubPage(QWizardPage):
         gp_result = None
         result_title = None
         champion = None
+        champion_year = None
         next_gp_country = str(next_gp_row['country']) if next_gp_row is not None else None
         if season_complete:
             gp_result = standings[:5]
             result_title = 'FINAL STANDINGS'
             champion = standings[0].get('name') if standings else None
+            champion_year = wiz.season_year
         elif show_next_gp:
             gp_result = _gp_point_scorers(live_rounds[-1]) if live_rounds else []
         else:
@@ -3637,7 +3646,7 @@ class SeasonHubPage(QWizardPage):
                                  next_gp_country=next_gp_country,
                                  gp_result=gp_result,
                                  result_title=result_title,
-                                 champion=champion)
+                                 champion=champion, champion_year=champion_year)
         self._season_info.load(standings, team_standings, manu_standings,
                                self._wiz.season_df, current_rounds_detail)
 

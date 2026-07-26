@@ -1,0 +1,101 @@
+name,age,nationality,braking,cornering,aggression,tyre_management,wet_performance,consistency
+Christian Merlo,18,Italy,83,84,80,79,81,85
+Hugo Lecomte,19,France,81,85,80,83,83,80
+Haziq Zulkifli,22,Malaysia,90,84,86,82,79,80
+Elliot Roper,24,United Kingdom,77,83,77,90,88,85
+Mateo Delgado,22,Spain,77,80,78,87,84,85
+Haruki Onodera,20,Japan,88,80,83,78,80,84
+Rodrigo Montoya,25,Spain,90,84,89,78,83,76
+Kerem Ozdemir,20,Turkey,79,88,79,90,83,90
+Andres Pena,22,Spain,83,87,80,81,80,80
+Tyson Radford,22,Australia,90,89,89,78,87,76
+Lucas Peixoto,19,Brazil,81,81,83,72,75,73
+Julen Garcia,24,Spain,77,86,79,91,89,87
+Xabi Bernal,23,Spain,86,91,86,84,91,91
+Vinicius Andrade,26,Brazil,87,83,88,78,85,79
+Brandon Whitfield,22,United States,84,89,86,82,88,82
+Callum Merrick,26,United Kingdom,84,88,87,88,92,89
+Edoardo Barbieri,20,Italy,79,79,76,87,84,86
+Nathan Ashworth,18,United Kingdom,87,92,86,85,93,86
+Sergio Hidalgo,23,Spain,79,90,82,82,84,85
+Giacomo Mancuso,22,Italy,84,82,86,84,86,80
+Carlos Campos,22,Spain,86,90,83,84,90,86
+Emanuele Bruni,22,Italy,83,91,88,90,94,91
+Rizky Setiawan,22,Indonesia,81,82,79,80,89,82
+Francesco Colombo,23,Italy,89,80,89,78,85,80
+Lewis Pemberton,22,United Kingdom,79,91,88,82,84,85
+Dani Recio,19,Spain,86,86,81,93,91,93
+Bagas Wijaya,19,Indonesia,82,82,81,86,86,84
+Finn Hauser,18,Germany,83,86,87,83,86,84
+Sam Ogden,23,United Kingdom,84,90,85,81,85,86
+Hiroto Kawamura,21,Japan,90,85,87,77,85,78
+Daan Verhoeven,19,Netherlands,87,88,89,79,87,79
+Enzo Bourdon,21,France,75,78,73,82,81,84
+Tim Steinbach,22,Germany,84,85,76,88,82,87
+Nicolo Guerra,24,Italy,91,84,87,83,80,84
+Harvey Thorne,22,United Kingdom,83,90,83,82,90,84
+Davide Squarcia,23,Italy,85,79,81,81,83,84
+Scott Selby,23,United Kingdom,84,84,77,88,89,90
+Charlie Kendall,23,United Kingdom,84,86,78,87,88,88
+Nicolas Iglesias,21,Spain,81,84,81,81,83,81
+Roberto Lanzi,24,Italy,83,90,82,80,81,84
+Kaito Sasaki,19,Japan,91,87,91,79,83,78
+Diego Nieto,21,Spain,86,75,84,73,78,76
+Hugo Lozano,20,Spain,86,87,88,77,80,75
+George Yardley,23,United Kingdom,77,83,78,90,87,85
+Stefano Toselli,19,Italy,79,77,82,70,75,73
+Martin Carrasco,21,Spain,83,82,82,90,85,89
+Leon Hartmann,20,Germany,80,85,85,82,80,79
+Luca Palmieri,19,Italy,83,80,75,87,82,86
+Samuele Ferraris,20,Italy,79,83,85,81,79,85
+Liam Prescott,21,United Kingdom,81,81,79,87,84,88
+Raul Castillo,22,Spain,85,91,83,84,83,85
+Turki Al-Qahtani,18,Saudi Arabia,84,89,79,93,91,93
+Cristian Pagani,20,Italy,85,82,88,77,85,76
+Pablo Vilaseca,23,Spain,83,87,83,87,86,85
+Manuel Conti,22,Italy,79,85,83,84,81,81
+Enrico Vitali,22,Italy,79,85,81,90,82,85
+Tommaso Venturi,20,Italy,78,76,76,82,76,77
+Izan Cuenca,20,Spain,78,81,77,81,78,77
+Tom Barnes,25,United Kingdom,83,83,78,86,88,91
+Pietro Bertolini,24,Italy,78,79,74,88,84,89
+Iker Escudero,20,Spain,87,84,84,84,87,85
+Julian Keller,20,Germany,78,87,82,89,85,89
+Pedro Palomares,21,Spain,79,80,81,82,85,84
+Clement Faivre,20,France,75,75,76,78,75,75
+Elias Bergstrom,20,Sweden,84,84,85,77,79,75
+Federico Neri,20,Italy,79,80,82,71,73,70
+Connor Marsh,21,United Kingdom,86,82,83,86,83,81
+Wyatt Holloway,23,United States,83,85,82,89,86,86
+Mathis Chevalier,21,France,77,78,81,78,81,79
+Rodrigo Cardoso,20,Portugal,85,82,88,73,81,74
+Yassine Benjelloun,20,Morocco,86,90,90,90,94,92
+Elia Tonucci,23,Italy,85,77,81,73,75,82
+Michele Moretti,22,Italy,77,85,75,86,81,87
+Santiago Zamora,24,Mexico,77,84,82,91,89,89
+Lachlan Prowse,24,Australia,83,86,79,86,86,89
+Giulio De Luca,19,Italy,83,81,82,84,79,84
+Niccolo Amato,25,Italy,79,85,76,84,81,86
+Jonas Kruger,18,Germany,83,92,88,84,85,88
+Franco Ledesma,22,Argentina,83,83,89,76,83,77
+Daniele Basso,18,Italy,90,84,88,82,80,85
+Alejandro Rueda,22,Spain,84,82,84,84,84,82
+Ivan Valero,23,Spain,83,87,81,93,91,93
+Chase Ferguson,21,United States,86,80,86,73,82,76
+Ren Tsujimoto,20,Japan,78,90,87,82,82,83
+Reece Culshaw,22,United Kingdom,80,89,85,83,87,85
+Lucas Berthier,20,France,83,90,81,80,85,83
+Nil Otero,21,Spain,76,81,75,88,83,89
+Lorenzo Testa,21,Italy,85,89,85,83,81,88
+Aitor Gallardo,21,Spain,83,84,77,88,83,87
+Archie Halliday,22,United Kingdom,84,81,79,78,79,80
+Pau Sanchis,19,Spain,87,87,82,86,84,85
+Ethan Dunmore,19,Australia,85,82,83,87,85,87
+Oliver Denton,23,United Kingdom,85,87,80,87,85,88
+Somchai Chaiyasit,20,Thailand,92,89,92,81,84,81
+Borja Gimeno,25,Spain,87,82,88,78,84,74
+Riccardo Riva,24,Italy,79,77,76,77,78,76
+Riku Ishida,22,Japan,83,83,81,81,81,83
+Ruben Reyes,21,Spain,87,92,86,84,89,90
+Marc Bravo,20,Spain,78,88,79,90,87,88
+Simone Corsi,26,Italy,81,90,85,92,91,90

@@ -616,6 +616,26 @@ class CalendarPage(QWizardPage):
         wiz.season_df = None
         wiz.round_results = []          # fresh season — clear past results
         wiz.season_complete = False     # setting up a season clears the "finished" summary state
+        # A season that was abandoned mid-way (NEW pressed over an in-progress
+        # season) or whose finish path left these untouched must not leak its
+        # circuit/round-in-progress state into the new season — otherwise
+        # SeasonHubPage._build_live_rounds_detail reconstructs a phantom round
+        # from the stale wiz.race_results + wiz.circuit and the brand-new
+        # season opens with the old season's standings still showing. Mirrors
+        # the clearing reset_career_progress/begin_next_season_setup/
+        # _mark_season_complete already do for their own callers.
+        wiz.circuit_index      = 0
+        wiz.session_index      = 0
+        wiz.all_race_pts       = []
+        wiz.race_pts           = []
+        wiz.race_results       = []
+        wiz.race_fastest_laps  = []
+        wiz.circuit            = None
+        wiz.practice_results   = None
+        wiz.quali_result       = None
+        wiz.grid_all_df        = None
+        wiz.weekend_weather    = None
+        wiz.gp_recap_dismissed_for = None
         self._assign = [None] * self._n
         for bar in self._slots:
             bar.set_circuit(None)

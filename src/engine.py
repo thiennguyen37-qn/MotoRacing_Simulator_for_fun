@@ -10,8 +10,17 @@ MAX_DELTA = 3.0
 FORM_STD        = 0.060   # per-race form swing (score units), before consistency scaling
 TRAFFIC_K       = 0.10    # seconds lost per grid slot behind, on the opening lap
 TRAFFIC_LAPS    = 5       # laps over which the grid/traffic penalty fades to zero
-RACE_TIME_PEN_MAX = 1.0   # seconds/lap penalty for worst-vs-best score (race only; Practice/Quali keep MAX_DELTA)
-TYRE_DEG_MAX    = 0.8     # seconds lost per lap to tyre wear, worst tyre_management at full distance (dry only; wet tyre wear isn't modelled)
+# Race pace vs tyre wear. These two are balanced against each other: the first
+# is the spread the whole combined rider+bike score is worth, the second is what
+# the single tyre_management rating is worth. At 1.0/0.8 tyre wear was 80% of
+# the entire skill spread and — being absent from qualifying, which uses the
+# much wider MAX_DELTA — a pole-sitter with weak tyre_management fell ~3 places
+# every race and never reached the podium, while a slow-qualifying tyre
+# specialist gained ~4. Widening the pace spread and halving the wear keeps the
+# archetypes (they still lose/gain ~1.5-3 places) without deciding the race on
+# one stat.
+RACE_TIME_PEN_MAX = 1.3   # seconds/lap penalty for worst-vs-best score (race only; Practice/Quali keep MAX_DELTA)
+TYRE_DEG_MAX    = 0.5     # seconds lost per lap to tyre wear, worst tyre_management at full distance (dry only; wet tyre wear isn't modelled)
 WET_PEN_BASE    = 1.0     # flat seconds/lap penalty applied to everyone when it's wet, so a wet lap always runs slower than the dry base lap
 WET_PEN_SKILL_MAX = 1.0   # extra seconds/lap penalty for worst-vs-best wet_performance, on top of the flat penalty
 CRASH_PROB_BASE = 0.0055  # per-lap DNF chance floor (calmest/steadiest riders)

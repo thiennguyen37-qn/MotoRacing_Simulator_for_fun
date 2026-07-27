@@ -21,7 +21,7 @@ from app.pages.p_history import (_aggregate_riders, _build_rider_race_matrix,
                                   _rider_race_results,
                                   _flag_pixmap, _season_tables_data, _honours_data)
 from app.widgets.table_utils import (TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR, row_bg,
-                                      make_table)
+                                      row_accent, make_table)
 from app.widgets.world_map import WorldMapWidget
 from app.wizard import SESSION_NAMES, SESSION_DAY
 from src.simulator import POINTS, WET_RACE_PROB_PCT
@@ -3176,27 +3176,6 @@ class _StandingsScreen(_SideSubHub):
         self._manu.load(manu, lambda s: MANU_COLOR.get(str(s.get('name', '')), _DEFAULT_COLOR))
 
 
-def _seat_tint(tc: QColor) -> QColor:
-    """Team colour pulled into a band that works as a row fill behind white
-    text. The palette spans Triumph's near-black and BMW's near-white, and
-    neither survives being used raw: one reads as no colour at all, the other as
-    a grey slab you can't read off. Clamping value (and saturation, so the
-    brightest reds don't vibrate) keeps all twelve recognisable as *their* colour
-    while sharing one legibility floor. Greys get pulled down further — with no
-    hue to carry it, lightness is all they have."""
-    h, s, v, a = tc.getHsv()
-    ceiling = 112 if s < 40 else 148
-    return QColor.fromHsv(h, min(s, 205), max(70, min(v, ceiling)), a)
-
-
-def _seat_accent(tc: QColor) -> QColor:
-    """The same colour at full strength, for the strip and team name beside the
-    row — those sit on the page's own dark backdrop, so here the floor is a
-    minimum brightness rather than a ceiling."""
-    h, s, v, a = tc.getHsv()
-    return QColor.fromHsv(h, min(s, 190), max(v, 190), a)
-
-
 class _RiderSeat(QFrame):
     """One rider inside a team row: bike number and name, on the team's colour.
 
@@ -3218,7 +3197,9 @@ class _RiderSeat(QFrame):
         lay.setContentsMargins(14, 0, 14, 0)
         lay.setSpacing(12)
         self._num = QLabel('')
-        self._num.setFont(QFont('Consolas', 12, QFont.Weight.Bold))
+        # Segoe UI, like a session table's bike-number column — and unlike
+        # Consolas, whose slashed zero reads as a typo on a number such as #20.
+        self._num.setFont(QFont('Segoe UI', 12, QFont.Weight.Bold))
         self._num.setFixedWidth(38)
         lay.addWidget(self._num)
         self._name = QLabel('')
@@ -3247,8 +3228,11 @@ class _RiderSeat(QFrame):
         self._apply()
 
     def _apply(self):
-        bg = _seat_tint(self._tc)
-        accent = _seat_accent(self._tc)
+        # row_bg + row_accent, the exact pair a session results table paints a
+        # team's row with — the standard for team colour across the app, so a
+        # team reads the same here as it does on the timing screen.
+        bg = row_bg(self._tc)
+        accent = row_accent(self._tc)
         if self._focused:
             bg, border = bg.lighter(140), accent.name()
             num, name, width = '#ffffff', '#ffffff', 2
@@ -3287,11 +3271,13 @@ class _TeamRow(QWidget):
             lay.addWidget(s, 1)
 
     def load(self, team: str, riders: list, tc: QColor, player_name: str):
-        accent = _seat_accent(tc)
-        self._bar.setStyleSheet(f'background: {accent.name()}; border: none;'
+        # The strip is the raw team colour, like the accent bar a session table
+        # draws down the left of a row; the name beside it is the lifted shade,
+        # which is what stays readable on the page's dark backdrop.
+        self._bar.setStyleSheet(f'background: {tc.name()}; border: none;'
                                 f' border-radius: 2px;')
         self._team.setText(team.upper())
-        self._team.setStyleSheet(f'color: {accent.name()};'
+        self._team.setStyleSheet(f'color: {row_accent(tc).name()};'
                                  f' background: transparent; border: none;')
         for i, seat in enumerate(self.seats):
             r = riders[i] if i < len(riders) else None

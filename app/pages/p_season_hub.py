@@ -13,7 +13,7 @@ from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint, QSiz
                           QSequentialAnimationGroup, QEasingCurve, QAbstractAnimation)
 
 from app.pages.p_gallery import (STATS, _make_scroll_area, _BIKES_DIR, _BIKE_IMAGE,
-                                  _RidersView)
+                                  _RiderDetail)
 from app.pages.p_calendar import _SlotBar
 from app.pages.p_home import ExitDialog
 from app.pages.p_history import (_aggregate_riders, _build_rider_race_matrix,
@@ -3176,41 +3176,305 @@ class _StandingsScreen(_SideSubHub):
         self._manu.load(manu, lambda s: MANU_COLOR.get(str(s.get('name', '')), _DEFAULT_COLOR))
 
 
-class _RiderInfoScreen(QWidget):
-    """RIDERS entry within Season Info — the Gallery's rider browser (list on
-    the left, stats on the right), but showing THIS career's grid.
+def _seat_tint(tc: QColor) -> QColor:
+    """Team colour pulled into a band that works as a row fill behind white
+    text. The palette spans Triumph's near-black and BMW's near-white, and
+    neither survives being used raw: one reads as no colour at all, the other as
+    a grey slab you can't read off. Clamping value (and saturation, so the
+    brightest reds don't vibrate) keeps all twelve recognisable as *their* colour
+    while sharing one legibility floor. Greys get pulled down further — with no
+    hue to carry it, lightness is all they have."""
+    h, s, v, a = tc.getHsv()
+    ceiling = 112 if s < 40 else 148
+    return QColor.fromHsv(h, min(s, 205), max(70, min(v, ceiling)), a)
 
-    It reads wiz.df, which in a career is the slot's own roster plus the player
+
+def _seat_accent(tc: QColor) -> QColor:
+    """The same colour at full strength, for the strip and team name beside the
+    row — those sit on the page's own dark backdrop, so here the floor is a
+    minimum brightness rather than a ceiling."""
+    h, s, v, a = tc.getHsv()
+    return QColor.fromHsv(h, min(s, 190), max(v, 190), a)
+
+
+class _RiderSeat(QFrame):
+    """One rider inside a team row: bike number and name, on the team's colour.
+
+    Two of these sit side by side per team, so a seat that nobody fills (a grid
+    caught mid-market, or a legacy career whose roster predates the player
+    taking a real seat) still holds its half of the row rather than letting the
+    other rider stretch across it."""
+
+    _H = 54
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(self._H)
+        self._focused = False
+        self._empty   = True
+        self._tc      = _DEFAULT_COLOR
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 0, 14, 0)
+        lay.setSpacing(12)
+        self._num = QLabel('')
+        self._num.setFont(QFont('Consolas', 12, QFont.Weight.Bold))
+        self._num.setFixedWidth(38)
+        lay.addWidget(self._num)
+        self._name = QLabel('')
+        self._name.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
+        lay.addWidget(self._name, 1)
+        self._tag = QLabel('')
+        self._tag.setFont(QFont('Segoe UI', 8, QFont.Weight.Bold))
+        lay.addWidget(self._tag)
+        self._apply()
+
+    def set_rider(self, rider: dict | None, tc: QColor, is_player: bool):
+        self._empty = rider is None
+        self._tc = tc
+        if rider is None:
+            self._num.setText('')
+            self._name.setText('—')
+            self._tag.setText('')
+        else:
+            self._num.setText(f"#{rider['bike_number']}")
+            self._name.setText(str(rider['name']).upper())
+            self._tag.setText('YOU' if is_player else '')
+        self._apply()
+
+    def set_focused(self, f: bool):
+        self._focused = f
+        self._apply()
+
+    def _apply(self):
+        bg = _seat_tint(self._tc)
+        accent = _seat_accent(self._tc)
+        if self._focused:
+            bg, border = bg.lighter(140), accent.name()
+            num, name, width = '#ffffff', '#ffffff', 2
+        else:
+            border, num, name, width = 'transparent', accent.name(), '#e8e8f0', 2
+        if self._empty:
+            bg, num, name = QColor(14, 14, 22), '#555566', '#555566'
+        self.setStyleSheet(
+            f'QFrame {{ background: {bg.name()}; border: {width}px solid {border};'
+            f' border-radius: 5px; }}'
+            f' QLabel {{ background: transparent; border: none; }}')
+        self._num.setStyleSheet(f'color: {num};')
+        self._name.setStyleSheet(f'color: {name};')
+        self._tag.setStyleSheet('color: #ffd24a;')
+
+
+class _TeamRow(QWidget):
+    """A team's name and its two seats, as one line of the grid."""
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+
+        self._bar = QFrame()
+        self._bar.setFixedWidth(4)
+        lay.addWidget(self._bar)
+        self._team = QLabel('')
+        self._team.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+        self._team.setFixedWidth(190)
+        lay.addWidget(self._team)
+        self.seats = [_RiderSeat(), _RiderSeat()]
+        for s in self.seats:
+            lay.addWidget(s, 1)
+
+    def load(self, team: str, riders: list, tc: QColor, player_name: str):
+        accent = _seat_accent(tc)
+        self._bar.setStyleSheet(f'background: {accent.name()}; border: none;'
+                                f' border-radius: 2px;')
+        self._team.setText(team.upper())
+        self._team.setStyleSheet(f'color: {accent.name()};'
+                                 f' background: transparent; border: none;')
+        for i, seat in enumerate(self.seats):
+            r = riders[i] if i < len(riders) else None
+            seat.set_rider(r, tc, r is not None and r['name'] == player_name)
+
+
+class _RiderGridView(QWidget):
+    """The season's grid as twelve team rows of two riders each.
+
+    Reads wiz.df, which in a career is the slot's own roster plus the player
     (see wizard.apply_roster_to_df), so once a transfer market has run it shows
-    the riders actually racing next season rather than the CSV line-up the
-    Gallery draws. That's also why the list is rebuilt on every load instead of
-    populated once.
+    the riders actually racing rather than the CSV line-up — which is why it is
+    rebuilt on every load instead of populated once.
 
-    Having handle_key is what tells _SideSubHub this is a self-driving view: it
-    gets added with no tint wrap, which is right — _RidersView paints its own
-    near-opaque backdrop already."""
+    Rows are ordered by bike power, strongest first, computed from the riders'
+    own bike stats rather than by re-reading bikes_rating.csv: they carry the
+    machinery they were signed onto (transfers.sign), so this stays right even
+    for a grid the CSV no longer describes.
+    """
 
     def __init__(self, wiz):
         super().__init__()
-        self.setStyleSheet('background: transparent;')
-        self._view = _RidersView(wiz)
+        self._wiz = wiz
+        self._rows: list = []
+        self._squads: list = []          # [(team, [rider, …]), …] matching _rows
+        self._focus = (0, 0)             # (row, seat)
+        self._player_name = ''
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(40, 24, 40, 24)
+        root.setSpacing(0)
+        root.addWidget(_panel_title('RIDERS'))
+        root.addSpacing(12)
+
+        body = QWidget()
+        body.setStyleSheet('background: transparent;')
+        self._body_lay = QVBoxLayout(body)
+        self._body_lay.setContentsMargins(0, 0, 0, 0)
+        self._body_lay.setSpacing(6)
+        self._scroll = _make_scroll_area()
+        self._scroll.setWidget(body)
+        root.addWidget(self._scroll, 1)
+
+    def reload(self):
+        for row in self._rows:
+            row.setParent(None)
+            row.deleteLater()
+        self._rows, self._squads = [], []
+
+        # The career rider is whatever sits past the AI grid at the tail of the
+        # frame — the invariant apply_roster_to_df keeps — rather than a re-read
+        # of rider.json, which would miss a rider created but not yet committed.
+        df = self._wiz.df
+        tail = df.iloc[int(getattr(self._wiz, '_base_rider_count', len(df))):]
+        self._player_name = str(tail.iloc[0]['name']) if len(tail) else ''
+
+        squads: dict = {}
+        for _, row_s in df.iterrows():
+            r = row_s.to_dict()
+            squads.setdefault(str(r.get('team', '')), []).append(r)
+        for riders in squads.values():
+            riders.sort(key=lambda r: int(r['bike_number']))
+
+        def power(riders):
+            keys = ('top_speed', 'acceleration', 'bike_braking',
+                    'bike_cornering', 'stability')
+            return sum(float(riders[0].get(k, 0)) for k in keys) / len(keys)
+
+        for team, riders in sorted(squads.items(), key=lambda kv: -power(kv[1])):
+            tc = TEAM_COLOR.get(team) or MANU_COLOR.get(
+                str(riders[0].get('manufacturer', '')), _DEFAULT_COLOR)
+            row = _TeamRow()
+            row.load(team, riders, tc, self._player_name)
+            self._body_lay.addWidget(row)
+            self._rows.append(row)
+            self._squads.append((team, riders))
+        self._body_lay.addStretch(1)
+
+        self._focus = (0, 0)
+        self._sync_focus()
+
+    def current(self) -> dict | None:
+        """The rider under the cursor, or None on an empty seat."""
+        r, c = self._focus
+        if r >= len(self._squads):
+            return None
+        riders = self._squads[r][1]
+        return riders[c] if c < len(riders) else None
+
+    def _sync_focus(self):
+        for i, row in enumerate(self._rows):
+            for j, seat in enumerate(row.seats):
+                seat.set_focused((i, j) == self._focus)
+        if self._rows:
+            self._scroll.ensureWidgetVisible(self._rows[self._focus[0]], 0, 40)
+
+    def move(self, dr: int, dc: int):
+        if not self._rows:
+            return
+        r, c = self._focus
+        if dr:
+            r = (r + dr) % len(self._rows)
+        if dc:
+            c = (c + dc) % 2
+        self._focus = (r, c)
+        self._sync_focus()
+
+
+class _RiderInfoScreen(QWidget):
+    """RIDERS entry within Season Info: the grid of twelve team rows, and the
+    rider's own page once one is opened with Enter.
+
+    Having handle_key is what tells _SideSubHub this is a self-driving view: it
+    gets added with no tint wrap, which is right — both pages below paint their
+    own near-opaque backdrop already."""
+
+    def __init__(self, wiz):
+        super().__init__()
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self._grid = _RiderGridView(wiz)
+        # Placeholder until the rider page is specified: Gallery's own panel,
+        # which at least shows the right rider.
+        self._detail = _RiderDetail()
+        detail_page = QWidget()
+        detail_page.setStyleSheet('background: transparent;')
+        dl = QVBoxLayout(detail_page)
+        dl.setContentsMargins(0, 0, 0, 0)
+        self._detail_scroll = _make_scroll_area()
+        self._detail_scroll.setWidget(self._detail)
+        dl.addWidget(self._detail_scroll)
+
+        self._stack = QStackedWidget()
+        self._stack.setStyleSheet('background: transparent;')
+        self._stack.addWidget(self._grid)
+        self._stack.addWidget(detail_page)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(self._view)
+        lay.addWidget(self._stack)
 
     def load(self):
-        self._view.reload()
+        self._grid.reload()
+        self._stack.setCurrentIndex(0)
 
     def handle_key(self, key: int):
         K = Qt.Key
-        if key in (K.Key_Up, K.Key_Down):
-            self._view.move_selection(key == K.Key_Down)
-            # Browsing a long list, not moving a tab focus — 'scroll' is what
-            # tells SeasonHubPage to suppress the wizard's 'navigate' click.
+        if self._stack.currentIndex() == 1:            # a rider's own page
+            if key in (K.Key_Escape, K.Key_Backspace):
+                self._stack.setCurrentIndex(0)
+                return None
+            if key in (K.Key_Up, K.Key_Down):
+                bar = self._detail_scroll.verticalScrollBar()
+                if bar is not None:
+                    bar.setValue(bar.value() + (-60 if key == K.Key_Up else 60))
+                return 'scroll'
+            return None
+
+        if key in (K.Key_Up, K.Key_Down, K.Key_Left, K.Key_Right):
+            self._grid.move(1 if key == K.Key_Down else -1 if key == K.Key_Up else 0,
+                            1 if key == K.Key_Right else -1 if key == K.Key_Left else 0)
+            # Moving around the grid is browsing, not a tab-focus move —
+            # 'scroll' is what tells SeasonHubPage to suppress the wizard's
+            # 'navigate' click.
             return 'scroll'
+        if key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+            rider = self._grid.current()
+            if rider is not None:
+                self._detail.load(rider)
+                self._detail_scroll.verticalScrollBar().setValue(0)
+                self._stack.setCurrentIndex(1)
+            return None
         if key in (K.Key_Escape, K.Key_Backspace):
             return 'close'
         return None              # swallow the rest rather than let it fall through
+
+    def paintEvent(self, event):
+        # Both pages below are transparent, so the near-opaque backdrop belongs
+        # here — it is also what lets _SideSubHub add this view with no tint
+        # wrap of its own.
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(5, 5, 14, 218))
 
 
 class _SeasonInfoScreen(_SideSubHub):

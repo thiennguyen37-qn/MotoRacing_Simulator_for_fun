@@ -9,6 +9,7 @@ from PyQt6.QtGui import QPainter, QColor
 from PyQt6.QtCore import Qt, QEvent, QTimer
 
 from src.loader import load_riders, load_circuits
+from src.transfers import drop_for_player, pool_entry
 from app.audio import AudioManager
 from app.widgets.now_playing import NowPlayingToast
 from app.widgets.video_bg import VideoBackground
@@ -791,7 +792,12 @@ class MotoWizard(QWizard):
         the same off-season — a grid where every seat opens at once would churn
         in waves instead of a steady trickle. `contract_until` is the last season
         the deal covers (inclusive), so a rider is a free agent in the Y -> Y+1
-        off-season when `contract_until <= Y`."""
+        off-season when `contract_until <= Y`.
+
+        The career rider takes a seat rather than being added on top of the 24,
+        so their team's weaker rider makes way here and goes into the career's
+        own pool, where a later off-season can call them back up (see
+        transfers.drop_for_player)."""
         year = int(year)
         riders = []
         for rec in load_riders(RAW).to_dict('records'):
@@ -801,7 +807,19 @@ class MotoWizard(QWizard):
             rider = {k: (v.item() if hasattr(v, 'item') else v) for k, v in rec.items()}
             rider['contract_until'] = year + random.choice((0, 1))
             riders.append(rider)
-        return {'year': year, 'riders': riders, 'retired': [], 'pool_used': []}
+
+        # Read from disk rather than taken as an argument: this runs from
+        # commit_pending_career_rider (which has just saved them) and from
+        # ensure_roster's fallback for a career that predates roster.json, and
+        # both want the same answer.
+        extra_pool = []
+        player = self.pending_career_rider or self.load_career_rider()
+        if player is not None:
+            displaced = drop_for_player(riders, player['team'])
+            if displaced is not None:
+                extra_pool.append(pool_entry(displaced))
+        return {'year': year, 'riders': riders, 'retired': [], 'pool_used': [],
+                'extra_pool': extra_pool}
 
     def load_roster(self):
         """Return the slot's roster dict, or None if absent/corrupt."""

@@ -23,8 +23,9 @@ import numpy as np
 
 from src.engine import circuit_weights, perf_score_race
 from src.loader import load_circuits, load_riders
-from src.transfers import (RIDER_STATS, expected_rank, run_silly_season,
-                           team_table)
+from src.transfers import (DISPLACE_STATS, RIDER_STATS, displace_rating,
+                           drop_for_player, expected_rank, pool_entry,
+                           run_silly_season, seat_player, team_table)
 
 RAW      = 'data/raw'
 SEASONS  = 25
@@ -266,15 +267,16 @@ def main():
     print(f'  pool da dung     {statistics.fmean(pool_used_end):.0f}/100 sau {SEASONS} mua')
     print(f'{"="*60}')
     player_ok = player_checks(weights)
-    return 0 if (structural_ok and balance_ok and player_ok) else 1
+    seat_ok = seat_checks(weights)
+    return 0 if (structural_ok and balance_ok and player_ok and seat_ok) else 1
 
 
 def player_checks(weights):
     """The career rider's own path through the market.
 
     The long run above races an AI-only grid, so none of this is exercised
-    there. The player is supernumerary — never one of the 24 AI seats — so what
-    is tested is which teams would sign them, not which seats are free.
+    there. What is tested here is which teams would sign them; the seat their
+    signing costs is seat_checks' business.
     """
     from src.transfers import DROP_EFFICIENCY, Offer, hire_bar
 
@@ -303,8 +305,12 @@ def player_checks(weights):
         return p
 
     def market(player, place):
-        """Run one off-season with the player finishing at championship `place`."""
+        """Run one off-season with the player finishing at championship `place`.
+
+        The roster is career-shaped: the player holds one of their team's two
+        seats, so the AI grid is 23 (see wizard.build_initial_roster)."""
         roster = fresh_roster()
+        drop_for_player(roster['riders'], player['team'])
         order = standings_for(roster['riders'], weights, random.Random(0))
         order.insert(place - 1, {'name': player['name'], 'team': player['team'],
                                  'points': 0})
@@ -315,7 +321,7 @@ def player_checks(weights):
     out = market(star, 3)                    # P3 on the worst bike = huge efficiency
     rep.check('player khong lot vao roster AI',
               star['name'] not in {r['name'] for r in out.riders})
-    rep.check('van du 24 AI', len(out.riders) == 24, len(out.riders))
+    rep.check('giu ghe cho player -> 23 AI', len(out.riders) == 23, len(out.riders))
     rep.check('chay xuat sac -> khong bi sa thai', not out.player_dropped)
     rep.check('duoc offer', len(out.player_offers) > 0)
     rep.check('co offer tu doi manh nhat',
@@ -360,6 +366,169 @@ def player_checks(weights):
     rep.check('ket qua trung binh -> khong duoc moi vao doi dau bang',
               'Ducati Factory Racing' not in got, sorted(got))
     return rep.done('Nguoi choi')
+
+
+def seat_checks(weights):
+    """The player takes a seat rather than being a 25th bike.
+
+    The invariant under test is the one the whole thing exists for: twelve teams,
+    two riders each, the player one of the 24 — for the whole length of a career,
+    however often they change team. Plus the fate of whoever they displace, who
+    goes into the career's own pool, ages there, and can be called back up.
+    """
+    rep = Report()
+    teams = team_table(RAW)
+    base = load_riders(RAW).to_dict('records')
+    pool_cols = {'name', 'age', 'nationality', 'braking', 'cornering',
+                 'aggression', 'tyre_management', 'wet_performance', 'consistency'}
+
+    def fresh(year=2026, rng=None):
+        rng = rng or random.Random(0)
+        riders = []
+        for rec in base:
+            r = {k: (v.item() if hasattr(v, 'item') else v) for k, v in rec.items()}
+            r['contract_until'] = year + rng.choice((0, 1))
+            riders.append(r)
+        return riders
+
+    def make_player(team, rating=84.0, year=2026):
+        row = teams[teams.team == team].iloc[0]
+        p = {'name': 'CAREER RIDER', 'age': 24, 'nationality': 'Vietnam',
+             'bike_number': 46, 'team': team, 'manufacturer': str(row['manufacturer']),
+             'team_status': str(row['team_status']), 'contract_until': year + 1,
+             'top_speed': int(row['top_speed']), 'acceleration': int(row['acceleration']),
+             'bike_braking': int(row['braking']), 'bike_cornering': int(row['cornering']),
+             'stability': int(row['stability'])}
+        for s in RIDER_STATS:
+            p[s] = rating
+        return p
+
+    # ── who makes way ────────────────────────────────────────────────────────
+    riders = fresh()
+    team = 'Razor Racing'
+    before = [r for r in riders if r['team'] == team]
+    gone = drop_for_player(riders, team)
+    rep.check('bo dung 1 nguoi', len(riders) == len(base) - 1, len(riders))
+    rep.check('bo nguoi yeu hon',
+              gone is before[0] if displace_rating(before[0]) < displace_rating(before[1])
+              else gone is before[1], gone['name'])
+    rep.check('doi do con dung 1 tay dua',
+              sum(1 for r in riders if r['team'] == team) == 1)
+    rep.check('doi khong lien quan khong bi dong',
+              all(sum(1 for r in riders if r['team'] == str(t)) == 2
+                  for t in teams['team'] if str(t) != team))
+    rep.check('ghe trong roi thi khong bo them',
+              drop_for_player(riders, team) is None)
+
+    # wet_performance is excluded, so it cannot be what saves a seat: give the
+    # weaker rider a perfect wet score and they still lose it.
+    riders = fresh()
+    pair = [r for r in riders if r['team'] == team]
+    weak = min(pair, key=displace_rating)
+    weak['wet_performance'] = 99.0
+    rep.check('wet performance khong cuu duoc ghe',
+              drop_for_player(riders, team) is weak, weak['name'])
+    rep.check('displace_rating bo qua wet performance',
+              'wet_performance' not in DISPLACE_STATS)
+
+    # ── the pool record ──────────────────────────────────────────────────────
+    entry = pool_entry(weak)
+    rep.check('pool entry dung cot cua riders_pool.csv',
+              set(entry) == pool_cols, sorted(set(entry) ^ pool_cols))
+    rep.check('pool entry giu nguyen chi so',
+              entry['braking'] == weak['rider_braking']
+              and entry['consistency'] == weak['consistency'])
+    rep.check('pool entry bo doi/xe/so',
+              not {'team', 'bike_number', 'top_speed'} & set(entry))
+
+    # ── a full career: the grid never leaves 12 x 2 ──────────────────────────
+    rng = random.Random(7)
+    player = make_player('Razor Racing')
+    riders = fresh(rng=rng)
+    displaced = drop_for_player(riders, player['team'])
+    roster = {'year': 2026, 'riders': riders, 'retired': [], 'pool_used': [],
+              'extra_pool': [pool_entry(displaced)]}
+    first_out = pool_entry(displaced)
+    sizes, teams_ok, moves, pool_ages = [], True, 0, []
+
+    for s in range(SEASONS):
+        year = 2026 + s
+        order = standings_for(roster['riders'], weights, rng)
+        order.insert(rng.randrange(0, 24), {'name': player['name'],
+                                            'team': player['team'], 'points': 0})
+        out = run_silly_season(roster, order, player, year, RAW, rng)
+
+        # the player picks an offer, exactly as p_transfers._commit does
+        offer = rng.choice(out.player_offers)
+        old_team, player['team'] = player['team'], offer.team
+        player.update({'manufacturer': offer.manufacturer,
+                       'team_status': offer.team_status, **offer.bike})
+        if offer.team != old_team:
+            moves += 1
+        grid = out.riders
+        left, _to = seat_player(grid, teams, old_team, offer.team, year, rng)
+        extra = list(out.extra_pool)
+        if left is not None and _to is None:
+            extra.append(pool_entry(left))
+
+        sizes.append(len(grid) + 1)
+        squads = {}
+        for r in grid:
+            squads[r['team']] = squads.get(r['team'], 0) + 1
+        squads[player['team']] = squads.get(player['team'], 0) + 1
+        if sorted(squads.values()) != [2] * 12 or len(squads) != 12:
+            teams_ok = False
+        pool_ages.append([e['age'] for e in extra if e['name'] == first_out['name']])
+        roster = {'year': out.year, 'riders': grid, 'pool_used': out.pool_used,
+                  'retired': roster['retired'] + out.retired, 'extra_pool': extra}
+
+    rep.check('luoi luon 24 tay dua', set(sizes) == {24}, sorted(set(sizes)))
+    rep.check('moi doi luon dung 2 tay dua', teams_ok)
+    rep.check('co doi doi trong career (kich ban co y nghia)', moves > 0, moves)
+    rep.check('player khong bao gio nam trong roster AI',
+              all(player['name'] != r['name'] for r in roster['riders']))
+
+    # ── the displaced rider's afterlife ──────────────────────────────────────
+    ages = [a[0] for a in pool_ages if a]
+    rep.check('nguoi bi day ra pool gia di moi mua',
+              ages == sorted(ages) and (len(ages) < 2 or ages[-1] > ages[0]),
+              f'{ages[:3]} … {ages[-3:]}' if ages else 'khong con trong pool')
+    rep.check('gia dung nhip (+1/mua)',
+              all(b - a == 1 for a, b in zip(ages, ages[1:])), ages[:5])
+
+    # a pool rider young enough to be wanted does come back: hand a team an empty
+    # seat and check the call-up can reach the career pool, not just the CSV.
+    riders = fresh(rng=random.Random(3))
+    for r in [r for r in riders if r['team'] == 'Inferno Factory']:
+        riders.remove(r)
+    star_entry = pool_entry(max(base, key=lambda rec: displace_rating(
+        {k: (v.item() if hasattr(v, 'item') else v) for k, v in rec.items()})))
+    star_entry['name'] = 'POOL RETURNEE'
+    star_entry['age'] = 26
+    roster = {'year': 2026, 'riders': riders, 'retired': [], 'pool_used': [],
+              'extra_pool': [star_entry]}
+    seen = False
+    for seed in range(60):                     # which rookie a team picks is random
+        out = run_silly_season(roster, standings_for(riders, weights,
+                                                     random.Random(seed)),
+                               None, 2026, RAW, random.Random(seed))
+        if any(r['name'] == 'POOL RETURNEE' for r in out.riders):
+            seen = True
+            break
+    rep.check('nguoi trong pool rieng co the duoc goi lai', seen)
+
+    # ── old age ends the wait ────────────────────────────────────────────────
+    old = dict(star_entry, name='POOL VETERAN', age=40)
+    roster = {'year': 2026, 'riders': fresh(rng=random.Random(1)),
+              'retired': [], 'pool_used': [], 'extra_pool': [old]}
+    out = run_silly_season(roster, standings_for(roster['riders'], weights,
+                                                 random.Random(1)),
+                           None, 2026, RAW, random.Random(1))
+    rep.check('qua tuoi thi roi khoi pool',
+              all(e['name'] != 'POOL VETERAN' for e in out.extra_pool))
+    rep.check('nhung khong bao roi giai (chua tung dua)',
+              all(r['name'] != 'POOL VETERAN' for r in out.retired))
+    return rep.done('Ghe cua player')
 
 
 if __name__ == '__main__':

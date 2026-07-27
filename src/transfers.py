@@ -21,11 +21,16 @@ The design and the reasoning behind every constant here live in
 * **Flow is one-way, satellite → factory.** A factory rider who loses their
   seat leaves the championship rather than dropping down.
 
-One deviation from the doc worth knowing: the player is *supernumerary*. The
-grid is 24 AI riders in 12 two-seat teams, and the career rider is a 25th on top
-(their team runs three bikes — this is how the game has always worked). So the
-player never competes for an AI seat, and their offers are "teams that want you"
-rather than "seats still empty".
+The player takes a real seat. The grid is 24 riders in 12 two-seat teams and the
+career rider is one of them, so whichever team they join runs the player plus one
+AI rider, never three bikes. Making room is `drop_for_player`: the weaker of the
+two sitting there loses the seat, and either swaps into the one the player just
+vacated or drops into the career's own pool (`pool_entry`) to be called up again
+in some later off-season.
+
+Their offers are still "teams that want you" rather than "seats still empty",
+though — a team will always make room for a rider it rates, so the player is
+judged on efficiency like everyone else and never has to wait for a vacancy.
 """
 
 from __future__ import annotations
@@ -88,6 +93,12 @@ CONTRACT_LENGTHS = (1, 2)
 
 RIDER_STATS = ['rider_braking', 'rider_cornering', 'aggression',
                'tyre_management', 'wet_performance', 'consistency']
+# Which of the two riders already at a team makes way for the player. Wet
+# performance is left out on purpose: it turns on the two or three wet races a
+# calendar happens to throw up, so counting it lets a rain specialist keep a
+# seat that a full season's evidence says they should lose.
+DISPLACE_STATS = ['rider_braking', 'rider_cornering', 'aggression',
+                  'tyre_management', 'consistency']
 BIKE_STATS  = ['top_speed', 'acceleration', 'bike_braking', 'bike_cornering',
                'stability']
 # riders_pool.csv uses the unprefixed names, same as riders_rating.csv
@@ -125,6 +136,9 @@ class Outcome:
     rookies: list = field(default_factory=list)       # [{name, team, age, ...}]
     moves: list = field(default_factory=list)         # [{name, from, to, kind}]
     pool_used: list = field(default_factory=list)     # cumulative, for the roster
+    # The career's own pool: riders who lost their seat to the player, aged on
+    # each off-season and callable again like any riders_pool.csv row.
+    extra_pool: list = field(default_factory=list)
     player_offers: list = field(default_factory=list) # [Offer]
     player_dropped: bool = False           # their team declined to keep them
 
@@ -247,6 +261,80 @@ def salvage_appeal(rider: dict) -> float:
     return rating(rider) - SALVAGE_AGE_K * max(0, int(rider['age']) - SALVAGE_PEAK_AGE)
 
 
+def displace_rating(rider: dict) -> float:
+    """Mean of DISPLACE_STATS — how a team ranks its two riders when one of them
+    has to make way for the player."""
+    return sum(float(rider[s]) for s in DISPLACE_STATS) / len(DISPLACE_STATS)
+
+
+def pool_entry(rider: dict) -> dict:
+    """A grid rider re-shaped as a riders_pool.csv record, so a career's own pool
+    can hold them in the same columns as the rows read from that file.
+
+    Everything tied to the seat they just lost — team, bike, number, contract —
+    is dropped: those come back from whichever team calls them up (see `sign`).
+    """
+    entry = {'name': str(rider['name']), 'age': int(rider['age']),
+             'nationality': str(rider.get('nationality', ''))}
+    for src, dst in POOL_STATS.items():
+        entry[src] = float(rider[dst])
+    return entry
+
+
+def _grid_shape(entry: dict) -> dict:
+    """A pool record back in grid column names, so the shared rider metrics
+    (rating, retire_probability) read it without a special case."""
+    rider = {'name': entry['name'], 'age': int(entry['age'])}
+    for src, dst in POOL_STATS.items():
+        rider[dst] = float(entry[src])
+    return rider
+
+
+def drop_for_player(riders: list, team: str) -> dict | None:
+    """Free up one of `team`'s two seats for the player, weaker rider first.
+
+    Mutates `riders` and hands back whoever lost the seat, or None if the team
+    was already down to one rider — which is the normal case for the team the
+    player is re-signing with, since the market left their seat open for them.
+    """
+    squad = [r for r in riders if str(r['team']) == str(team)]
+    if len(squad) < 2:
+        return None
+    out = min(squad, key=displace_rating)
+    riders.remove(out)
+    return out
+
+
+def seat_player(riders: list, teams: pd.DataFrame, old_team: str, new_team: str,
+                year: int, rng: random.Random) -> tuple[dict | None, str | None]:
+    """Sit the player in one of `new_team`'s two seats, and say what became of
+    the rider they displaced.
+
+    Signing the player costs a team its weaker rider (drop_for_player) the seat.
+    If the player is moving, that rider takes the one they left behind — a
+    straight swap, which is what keeps all twelve teams two-handed year after
+    year. If there is nowhere to put them (the player is re-signing, or their old
+    team already refilled the seat because it was the team that dropped them)
+    they are off the grid, and the caller should pool_entry() them.
+
+    This can't happen inside run_silly_season: which team the player signs for
+    isn't known until they pick an offer, which is long after the market has
+    finished placing everybody else.
+
+    Mutates `riders`. Returns (displaced rider, the team they moved to, or None
+    if they left the grid).
+    """
+    displaced = drop_for_player(riders, new_team)
+    if displaced is None:
+        return None, None                      # the market left the seat open
+    if str(old_team) == str(new_team) or \
+            sum(1 for r in riders if str(r['team']) == str(old_team)) >= 2:
+        return displaced, None
+    sign(displaced, teams[teams.team == str(old_team)].iloc[0], year, rng)
+    riders.append(displaced)
+    return displaced, str(old_team)
+
+
 def out_of_contract(rider: dict, year: int) -> bool:
     """True once the deal has run out. `year` is the season just finished."""
     return int(rider.get('contract_until', year)) <= int(year)
@@ -313,8 +401,17 @@ def free_number(taken: set, rng: random.Random) -> int:
 
 # ── The market ────────────────────────────────────────────────────────────────
 
-def _load_pool(raw_path, teams: pd.DataFrame) -> pd.DataFrame:
+def _load_pool(raw_path, teams: pd.DataFrame, extra: list | None = None) -> pd.DataFrame:
+    """The rookie pool: the shared CSV, plus this career's own displaced riders.
+
+    `extra` are pool_entry() records — riders the player pushed out of a seat.
+    They sit in the same columns as the CSV rows and are picked the same way, so
+    a call-up can just as easily bring back a 29-year-old who lost their ride
+    three seasons ago as hand a debut to an 18-year-old.
+    """
     pool = pd.read_csv(Path(raw_path) / 'riders_pool.csv')
+    if extra:
+        pool = pd.concat([pool, pd.DataFrame(extra)[pool.columns]], ignore_index=True)
     pool['rating'] = pool[list(POOL_STATS)].mean(axis=1)
     pool.attrs['power_mean'] = float(teams['power'].mean())
     pool.attrs['power_std'] = float(teams['power'].std())
@@ -325,18 +422,21 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
                      year: int, raw_path, rng: random.Random | None = None) -> Outcome:
     """Roll the grid from `year` into `year + 1`.
 
-    `roster`  — the wizard's roster dict (riders / retired / pool_used).
+    `roster`  — the wizard's roster dict (riders / retired / pool_used /
+                extra_pool).
     `standings` — the finished season's championship order, as archived in
                   history.json: [{'name', 'team', 'points'}, …] best first.
-    `player`  — the career rider dict, or None outside career mode. Never part
-                of the AI grid; evaluated separately at the end.
+    `player`  — the career rider dict, or None outside career mode. Not one of
+                `roster['riders']`, but they do hold a seat at their team, so
+                the seat count below leaves it open for them.
 
     Returns an Outcome; nothing is written to disk here.
     """
     rng = rng or random.Random()
     year = int(year)
     teams = team_table(raw_path)
-    pool = _load_pool(raw_path, teams)
+    extra_pool = [dict(e) for e in (roster.get('extra_pool') or [])]
+    pool = _load_pool(raw_path, teams, extra_pool)
     by_team = {str(t['team']): t for _, t in teams.iterrows()}
 
     position = {str(s['name']): i + 1 for i, s in enumerate(standings or [])}
@@ -352,9 +452,14 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
     player_mates = ([r['name'] for r in riders
                      if player and r['team'] == player['team']] if player else [])
 
-    # 1 ── everyone gets a year older
+    # 1 ── everyone gets a year older, including whoever is sitting out in the
+    # career's own pool: a rider the player displaced has to be the age they
+    # would actually be when a team comes back for them. (The CSV pool is not
+    # aged — those are the perpetual crop of newcomers, not real people waiting.)
     for r in riders:
         r['age'] = int(r['age']) + 1
+    for e in extra_pool:
+        e['age'] = int(e['age']) + 1
 
     # 2 ── retirements
     staying = []
@@ -364,6 +469,12 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
         else:
             staying.append(r)
     riders = staying
+    # Sitting out, they eventually stop waiting for the call. Same roll as the
+    # grid, but not announced: they left the championship seasons ago and a
+    # retirement notice for someone nobody has seen race would read as a bug.
+    extra_pool = [e for e in extra_pool
+                  if e['name'] in used
+                  or rng.random() >= retire_probability(_grid_shape(e))]
 
     # 3 ── factory seats lost to underperformance. Three conditions, all needed:
     #
@@ -401,6 +512,15 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
             keeping.append(r)
     riders = keeping
 
+    # 3b ── the player's own market, settled before any seat is filled: whether
+    # their team is keeping them decides whether that team has one seat to fill
+    # or two. It reads nothing the steps below produce — only where everyone
+    # finished and who the player's team-mates were — so running it here rather
+    # than at the end changes no outcome.
+    if player:
+        out.player_offers, out.player_dropped = _player_market(
+            teams, player_mates, player, position, year)
+
     # 4 ── who sits where now, and which seats need filling
     squads = {str(t): [] for t in teams['team']}
     for r in riders:
@@ -413,10 +533,21 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
     if player:
         taken_numbers.add(int(player['bike_number']))
 
+    # The player holds one of their team's two seats unless that team has just
+    # let them go, so that team is a rider short on paper and must NOT have the
+    # gap filled — do that and it would run three bikes the moment the player
+    # re-signs. Their seat only reopens to the AI if they were dropped; if they
+    # then leave of their own accord, the team they join hands its spare rider
+    # over to the one they left (see drop_for_player and p_transfers._commit).
+    held = (str(player['team']) if player and not out.player_dropped else None)
+
+    def occupancy(team: str) -> int:
+        return len(squads[team]) + (1 if team == held else 0)
+
     queue = []
     for _, t in teams.iterrows():                 # strongest bike picks first
         name = str(t['team'])
-        for _ in range(2 - len(squads[name])):
+        for _ in range(2 - occupancy(name)):
             queue.append({'team': name, 'baseline': dropped_eff.get(name, 0.0)})
 
     # 5 ── fill them, cascading: promoting a satellite rider opens their seat,
@@ -426,7 +557,7 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
         guard += 1
         seat = queue.pop(0)
         row = by_team[seat['team']]
-        if len(squads[seat['team']]) >= 2:
+        if occupancy(seat['team']) >= 2:
             continue                              # already filled by a cascade
 
         hire = None
@@ -449,7 +580,7 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
             cands = []
             for other, squad in squads.items():
                 o = by_team[other]
-                if float(o['power']) >= float(row['power']) or len(squad) <= 1:
+                if float(o['power']) >= float(row['power']) or occupancy(other) <= 1:
                     continue                      # not a step up, or would gut them
                 if row['team_status'] == 'satellite' and \
                         o['manufacturer'] == row['manufacturer']:
@@ -522,13 +653,7 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
 
     out.riders = riders
     out.pool_used = sorted(used)
-
-    # 7 ── the player. They are supernumerary, so this is not about empty seats:
-    # it is which teams would have them, judged on the same efficiency scale as
-    # everyone else.
-    if player:
-        out.player_offers, out.player_dropped = _player_market(
-            teams, player_mates, player, position, year)
+    out.extra_pool = extra_pool
     return out
 
 
@@ -540,6 +665,10 @@ def _player_market(teams, mates, player, position, year):
     the player is never forced out of the championship: a satellite seat is
     always preferable to ending the career against their will, so the one-way
     flow rule is deliberately not applied to them.
+
+    Offers are not limited to teams with a seat going. A team that rates the
+    player will drop the weaker of its two riders to sign them (drop_for_player);
+    what it will not do is take them at any price, which is what hire_bar is for.
     """
     p_eff = efficiency(teams, player, position.get(player['name']))
     mine = position.get(player['name'], 99)

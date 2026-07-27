@@ -28,8 +28,8 @@ Ba điều quyết định toàn bộ thiết kế:
 
 1. **Roster hiện không hề được lưu.** `MotoWizard.__init__` gọi
    `load_riders(RAW)` đọc thẳng từ `data/raw/entry_info.csv` mỗi lần khởi động
-   (`app/wizard.py:79`). Tay đua của người chơi chỉ là hàng thứ 25 nối vào bằng
-   `pd.concat`. Sau chuyển nhượng, đội hình không còn khớp CSV nữa → **bắt buộc
+   (`app/wizard.py:79`). Tay đua của người chơi được nối vào bằng `pd.concat` ở
+   cuối bảng. Sau chuyển nhượng, đội hình không còn khớp CSV nữa → **bắt buộc
    phải có roster bền vững**. Đây là phần việc lớn nhất, không phải UI.
 
 2. **Chỉ số xe tra theo `(manufacturer, team_status)`** từ `bikes_rating.csv`.
@@ -475,12 +475,29 @@ Từ 0.7 trở lên thì chức vô địch được quyết ở kỳ chuyển n
 Người chơi chịu **đúng luật như AI** — cùng thước đo hiệu quả, cùng ngưỡng. Khác
 biệt duy nhất: đến bước 7 họ được *chọn* thay vì bị gán.
 
-> ⚠ **Người chơi là suất dôi ra, không chiếm ghế AI.** Lưới thật có **25 tay
-> đua**: 24 AI trong 12 đội hai ghế, cộng người chơi làm người thứ 25 (đội của
-> họ chạy ba xe — game vẫn luôn như vậy, kiểm chứng trong slot0). Nên bước 7
-> **không phải** "offer từ các ghế còn trống" như bản thiết kế đầu viết — AI lấp
-> kín 24 ghế thì chẳng còn ghế nào. Thực tế là **"những đội muốn bạn"**: mọi đội
-> mà hiệu quả của người chơi vượt ngưỡng tuyển của đội đó.
+> ⚠ **Người chơi chiếm một ghế thật.** Lưới luôn đúng **24 tay đua**: 12 đội hai
+> ghế, người chơi là một trong số đó, nên đội của họ chạy đúng hai xe chứ không
+> phải ba. Ai nhường ghế thì do `drop_for_player` quyết: người yếu hơn trong hai
+> tay đua đang ngồi đó, chấm bằng trung bình **`DISPLACE_STATS`** — năm chỉ số,
+> **bỏ `wet_performance`** vì nó phụ thuộc vào việc lịch năm đó có mấy chặng mưa,
+> tính vào thì một chuyên gia đi mưa giữ được ghế mà cả mùa khô nói là không nên.
+>
+> Người mất ghế đi đâu tuỳ tình huống (`seat_player`):
+>
+> - **Người chơi đổi đội** → họ sang thẳng cái ghế người chơi vừa bỏ lại. Một cú
+>   hoán đổi, nên cả 12 đội vẫn đủ hai người.
+> - **Không có ghế nào để sang** (career mới tinh, hoặc đội cũ vừa sa thải người
+>   chơi nên đã lấp ghế đó rồi) → họ vào **pool riêng của career**
+>   (`roster.json → extra_pool`, xem `pool_entry`), già thêm một tuổi mỗi kỳ
+>   chuyển nhượng, và có thể được gọi lại y như một dòng trong `riders_pool.csv`.
+>   Ngồi ngoài quá lâu thì cùng phép thử giải nghệ như trên lưới sẽ loại họ hẳn —
+>   loại im lặng, vì báo "X giải nghệ" cho người mấy mùa rồi không ai thấy đua
+>   chỉ khiến người chơi tưởng game lỗi.
+>
+> Dù vậy bước 7 vẫn **không phải** "offer từ các ghế còn trống": một đội ưng
+> người chơi thì sẵn sàng đẩy người yếu hơn đi để lấy chỗ, nên đây vẫn là
+> **"những đội muốn bạn"** — mọi đội mà hiệu quả của người chơi vượt ngưỡng tuyển
+> của đội đó. Cái chặn không phải chỗ trống, mà là `hire_bar`.
 
 Họ luôn khởi nghiệp ở một đội **satellite** (`p_career._confirm_new_rider`), nên
 tự động là ứng viên promote cho đội factory cùng hãng — đó là nấc thang đầu tiên
@@ -505,7 +522,9 @@ của sự nghiệp:
    vì thành tích** — đây là cái phanh giữ nhịp thay máu ở mức pool chịu được.
 2. **Số xe giữ nguyên khi đổi đội**, chỉ đổi khi trùng.
 3. **12 đội cố định** (7 factory + 5 satellite), mỗi đội đúng 2 ghế, luôn đủ 24
-   tay đua AI. Suzuki và Kawasaki là factory không có đội em.
+   tay đua trên lưới. Trong career, người chơi chiếm 1 trong 24 ghế đó nên phần
+   AI là 23; ngoài career thì đủ 24 AI. Suzuki và Kawasaki là factory không có
+   đội em.
 4. **Dòng chảy một chiều**: satellite → factory. Tay đua factory bị loại rời hẳn
    giải chứ không xuống satellite.
 

@@ -14,7 +14,13 @@ Keyboard only, like every other page (MotoWizard.eventFilter):
 The market itself is rolled in initializePage() and held in memory until the
 player confirms — nothing is written until then, so backing out of the page
 leaves the career exactly as it was.
+
+One thing this page decides rather than reports: which rider loses their seat to
+the player. src.transfers can't, because it runs before the offer is picked — so
+_seat_player applies it here, both for the grid preview and for real on commit.
 """
+
+import random
 
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QWidget,
                              QLabel, QFrame, QStackedWidget, QSizePolicy)
@@ -25,7 +31,8 @@ from app.pages.p_gallery import _make_scroll_area
 from app.pages.p_season_hub import _StaticBackground, _TopTabBar, _panel_title, _HUB_BG
 from app.widgets.table_utils import TEAM_COLOR, _DEFAULT_COLOR
 from app.wizard import RAW
-from src.transfers import RIDER_STATS, run_silly_season, team_table
+from src.transfers import (RIDER_STATS, pool_entry, run_silly_season,
+                           seat_player, team_table)
 
 _TABS = ['DEPARTURES', 'YOUR CONTRACT', 'NEXT SEASON GRID', 'START NEXT SEASON']
 
@@ -442,20 +449,36 @@ class TransfersPage(QWizardPage):
             seasons = []
         return seasons[-1].get('standings', []) if seasons else []
 
+    def _seat_player(self, riders: list, old_team: str, new_team: str, rng):
+        """transfers.seat_player against this page's team table and season."""
+        return seat_player(riders, self._teams, old_team, new_team,
+                           self._outcome.year - 1, rng)
+
     def _refresh_grid(self):
         """Redraw the grid tab, showing the player at whichever team they have
-        signed for so far (their current one until they pick)."""
+        signed for so far (their current one until they pick), and the knock-on
+        move their signing forces."""
         if self._outcome is None:
             return
         player = self._wiz.load_career_rider()
         signed = self._offers.signed
+        riders = self._outcome.riders
+        moved = {m['name']: m['from'] for m in self._outcome.moves}
         if player and signed:
+            old_team = str(player['team'])
             player = dict(player)
             player.update({'team': signed.team, 'manufacturer': signed.manufacturer,
                            'team_status': signed.team_status, **signed.bike})
+            # A preview, so it works on copies. The seeded rng only picks a
+            # contract length, which this tab doesn't show — _commit rolls the
+            # one that counts.
+            riders = [dict(r) for r in riders]
+            displaced, to = self._seat_player(riders, old_team, signed.team,
+                                              random.Random(0))
+            if displaced is not None and to is not None:
+                moved[displaced['name']] = signed.team
         rookies = {r['name'] for r in self._outcome.rookies}
-        moved = {m['name']: m['from'] for m in self._outcome.moves}
-        self._grid.load(self._teams, self._outcome.riders, rookies, moved, player)
+        self._grid.load(self._teams, riders, rookies, moved, player)
 
     def _sync(self):
         for i, c in enumerate(self._bar.cards()):
@@ -512,14 +535,20 @@ class TransfersPage(QWizardPage):
 
         player = wiz.load_career_rider()
         signed = self._offers.signed
+        riders, extra = out.riders, list(out.extra_pool)
         if player and signed:
+            old_team = str(player['team'])
             player.update({'team': signed.team, 'manufacturer': signed.manufacturer,
                            'team_status': signed.team_status, **signed.bike})
             wiz.save_career_rider(player)
+            displaced, to = self._seat_player(riders, old_team, signed.team,
+                                              random.Random())
+            if displaced is not None and to is None:
+                extra.append(pool_entry(displaced))
 
         roster = wiz.load_roster() or {}
-        roster.update({'year': out.year, 'riders': out.riders,
-                       'pool_used': out.pool_used,
+        roster.update({'year': out.year, 'riders': riders,
+                       'pool_used': out.pool_used, 'extra_pool': extra,
                        'retired': (roster.get('retired') or []) + out.retired})
         wiz.save_roster(roster)
         wiz.apply_roster_to_df(roster)

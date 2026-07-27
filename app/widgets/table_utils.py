@@ -82,6 +82,16 @@ def row_bg(color: QColor) -> QColor:
     return QColor(max(r, 16), max(g, 16), max(b, 20))
 
 
+def row_accent(color: QColor) -> QColor:
+    """The team colour lifted clear of its own row_bg — what a session table
+    paints the bike number in. Anywhere else showing a team-coloured row should
+    use this pair (row_bg + row_accent) rather than inventing its own shade, or
+    the same team ends up two different colours on two screens."""
+    return QColor(min(color.red() + 80, 255),
+                  min(color.green() + 80, 255),
+                  min(color.blue() + 80, 255))
+
+
 def _is_time(s: str) -> bool:
     return ':' in s or s.startswith('+') or s in ('—', '---', '–')
 
@@ -245,11 +255,7 @@ def fill_table(
             color = MANU_COLOR.get(manu, _DEFAULT_COLOR)
 
         bg      = row_bg(color)
-        lighter = QColor(
-            min(color.red()   + 80, 255),
-            min(color.green() + 80, 255),
-            min(color.blue()  + 80, 255),
-        )
+        lighter = row_accent(color)
 
         for c, val in enumerate(row_data):
             txt  = str(val)

@@ -3,9 +3,10 @@ from pathlib import Path
 
 import numpy as np
 
-from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QWidget,
-                              QLabel, QStackedWidget, QFrame, QDialog, QSizePolicy,
-                              QSpacerItem, QGraphicsOpacityEffect, QHeaderView)
+from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout,
+                              QWidget, QLabel, QStackedWidget, QFrame, QDialog,
+                              QSizePolicy, QSpacerItem, QGraphicsOpacityEffect,
+                              QHeaderView)
 from PyQt6.QtGui import (QFont, QFontMetrics, QPainter, QColor, QPixmap, QPainterPath,
                           QLinearGradient, QPen, QImage)
 from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint, QSize,
@@ -3516,6 +3517,206 @@ class _SeasonInfoScreen(_SideSubHub):
         self._rider_info.load(career_totals)
 
 
+# ── Honours: Champions ────────────────────────────────────────────────────────
+
+class _ChampionBox(QFrame):
+    """One season's champion, painted in the colours they won it with: the
+    year, a rule, the rider, another rule, then the team and make."""
+
+    # Fixed so every box on the board is the same size whatever the names are:
+    # sized for a rider name that wraps to two lines, which the longest ones on
+    # the grid do once the window is narrow.
+    _H = 172
+
+    def __init__(self, year, name: str, team: str, manu: str, tc: QColor):
+        super().__init__()
+        self.setFixedHeight(self._H)
+        # Same team-colour pair as a session results row (see _RiderSeat).
+        accent = row_accent(tc)
+        self.setStyleSheet(
+            f'QFrame#champBox {{ background: {row_bg(tc).name()};'
+            f' border: 1px solid {accent.name()}; border-radius: 8px; }}'
+            f' QLabel {{ background: transparent; border: none; }}')
+        self.setObjectName('champBox')
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(0)
+        # Stretches top and bottom so the block sits centred in the fixed
+        # height whether the rider's name took one line or two.
+        lay.addStretch(1)
+
+        yr = QLabel(str(year))
+        yr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Segoe UI, not the Consolas the app uses for most figures: Consolas
+        # slashes its zero, which on a four-digit year reads as a typo.
+        yr.setFont(QFont('Segoe UI', 21, QFont.Weight.Bold))
+        yr.setStyleSheet('color: #ffffff; letter-spacing: 2px;')
+        lay.addWidget(yr)
+        lay.addSpacing(10)
+        lay.addWidget(self._rule(accent))
+        lay.addSpacing(10)
+
+        nm = QLabel(str(name).upper())
+        nm.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nm.setWordWrap(True)
+        nm.setFont(QFont('Segoe UI', 14, QFont.Weight.Bold))
+        nm.setStyleSheet('color: #ffffff;')
+        lay.addWidget(nm)
+        lay.addSpacing(10)
+        lay.addWidget(self._rule(accent))
+        lay.addSpacing(10)
+
+        tm = QLabel(str(team).upper())
+        tm.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tm.setWordWrap(True)
+        tm.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
+        tm.setStyleSheet('color: #e8e8f0;')
+        lay.addWidget(tm)
+        mf = QLabel(str(manu).upper())
+        mf.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mf.setFont(QFont('Segoe UI', 8))
+        mf.setStyleSheet('color: #c8c8d8; letter-spacing: 2px;')
+        lay.addWidget(mf)
+        lay.addStretch(1)
+
+    @staticmethod
+    def _rule(accent: QColor) -> QFrame:
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f'background: {accent.name()}; border: none;')
+        return line
+
+
+class _ChampionsView(QWidget):
+    """Every champion this career has crowned, three to a row, oldest first.
+
+    Reads the archived seasons rather than any running tally: a season only
+    has a champion once it is over, and that is exactly when it lands in
+    history.json (p4_championship._save_history)."""
+
+    _COLS = 3
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(48, 44, 48, 40)
+        outer.setSpacing(0)
+
+        title = QLabel('CHAMPIONS')
+        title.setFont(QFont('Segoe UI', 18, QFont.Weight.Bold))
+        title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
+        outer.addWidget(title)
+        outer.addSpacing(20)
+
+        self._scroll = _make_scroll_area()
+        cont = QWidget()
+        cont.setStyleSheet('background: transparent;')
+        # The grid sits in a column with a trailing stretch rather than being
+        # the container's own layout: the scroll area resizes its widget to the
+        # viewport, and a bare grid hands that spare height to whichever rows
+        # happen to expand — which had a middle row twice the height of the
+        # ones above and below it. The stretch soaks it up instead, so every
+        # row keeps its natural (equal) height.
+        col = QVBoxLayout(cont)
+        col.setContentsMargins(0, 0, 8, 0)
+        col.setSpacing(0)
+        grid_w = QWidget()
+        grid_w.setStyleSheet('background: transparent;')
+        self._grid = QGridLayout(grid_w)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(18)
+        self._grid.setVerticalSpacing(18)
+        col.addWidget(grid_w)
+        col.addStretch(1)
+        self._scroll.setWidget(cont)
+        outer.addWidget(self._scroll, 1)
+        self._empty = None
+
+    def scrollbar(self):
+        return self._scroll.verticalScrollBar()
+
+    def load(self, seasons: list):
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        if self._empty is not None:
+            self._empty.setParent(None)
+            self._empty.deleteLater()
+            self._empty = None
+
+        # Oldest first — the board reads as the career's history in the order it
+        # happened. Only seasons that actually classified somebody count.
+        crowned = [s for s in sorted(seasons or [], key=lambda s: s.get('year', 0))
+                   if s.get('standings')]
+        if not crowned:
+            self._empty = QLabel('No season has been completed yet — '
+                                 'the first champion will be crowned here.')
+            self._empty.setFont(QFont('Segoe UI', 13))
+            self._empty.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
+            self._grid.addWidget(self._empty, 0, 0, 1, self._COLS)
+            return
+
+        for i, season in enumerate(crowned):
+            top = season['standings'][0]
+            team = str(top.get('team', ''))
+            manu = str(top.get('manufacturer', ''))
+            tc = TEAM_COLOR.get(team) or MANU_COLOR.get(manu, _DEFAULT_COLOR)
+            box = _ChampionBox(season.get('year', '—'), top.get('name', '—'),
+                               team, manu, tc)
+            self._grid.addWidget(box, i // self._COLS, i % self._COLS)
+        # Equal stretch on all three columns is what spaces the boxes evenly,
+        # including on a final row that only has one or two of them.
+        for c in range(self._COLS):
+            self._grid.setColumnStretch(c, 1)
+
+
+class _ComingSoonView(QWidget):
+    """Placeholder for an Honours board that hasn't been designed yet."""
+
+    def __init__(self, title: str):
+        super().__init__()
+        self.setStyleSheet('background: transparent;')
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(48, 44, 48, 40)
+        lay.setSpacing(0)
+        t = QLabel(title)
+        t.setFont(QFont('Segoe UI', 18, QFont.Weight.Bold))
+        t.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
+        lay.addWidget(t)
+        lay.addSpacing(20)
+        note = QLabel('Not built yet.')
+        note.setFont(QFont('Segoe UI', 13))
+        note.setStyleSheet('color:#8a8aa2; background:transparent; border:none;')
+        lay.addWidget(note)
+        lay.addStretch(1)
+
+
+class _HonoursScreen(_SideSubHub):
+    """HONOURS: the same focus-then-open sub-hub as Season Info, over
+    CHAMPIONS / RECORDS / HALL OF FAME."""
+
+    def __init__(self):
+        self._champions = _ChampionsView()
+        self._records = _ComingSoonView('RECORDS')
+        self._hall = _ComingSoonView('HALL OF FAME')
+        super().__init__([
+            ('CHAMPIONS', self._champions, False),
+            ('RECORDS', self._records, False),
+            ('HALL OF FAME', self._hall, False),
+        ])
+
+    def load(self, seasons: list):
+        self._champions.load(seasons)
+        bar = self._champions.scrollbar()
+        if bar is not None:
+            bar.setValue(0)
+
+
 # ── Between-GP map transition ─────────────────────────────────────────────────
 
 class GpMapPage(QWizardPage):
@@ -3638,7 +3839,8 @@ class SeasonHubPage(QWizardPage):
         self._intro.finished.connect(self._show_hub)
         self._stack.addWidget(self._intro)                      # 0
 
-        self._hub = _TopTabBar(['TO NEXT SESSION', 'YOUR PROFILE', 'SEASON INFO', 'MAIN MENU'])
+        self._hub = _TopTabBar(['TO NEXT SESSION', 'YOUR PROFILE', 'SEASON INFO',
+                                'HONOURS', 'MAIN MENU'])
         self._hub_dashboard = _HubDashboard()
         hub_page = QWidget()
         hub_page.setStyleSheet('background: transparent;')
@@ -3667,6 +3869,9 @@ class SeasonHubPage(QWizardPage):
 
         self._season_info = _SeasonInfoScreen(self._wiz)
         self._stack.addWidget(self._wrap(self._season_info))     # 3
+
+        self._honours = _HonoursScreen()
+        self._stack.addWidget(self._wrap(self._honours))         # 4
 
         # Only the intro plays video; once it's done the hub/profile/season
         # info sit over this static image instead of the shared ambient loop.
@@ -3973,6 +4178,10 @@ class SeasonHubPage(QWizardPage):
         self._season_info.load(standings, team_standings, manu_standings,
                                self._wiz.season_df, current_rounds_detail,
                                career_totals)
+        # Archived seasons only — a season is written to history the moment it
+        # ends (p4_championship._save_history), so by the time the hub can show
+        # "SEASON COMPLETE" the just-crowned champion is already in there.
+        self._honours.load(seasons)
 
     def initializePage(self):
         # Arrival from Calendar: either a brand-new round (session_index is
@@ -4088,12 +4297,13 @@ class SeasonHubPage(QWizardPage):
             return True
 
         if idx == 1:                                     # hub — Esc disabled, use the Main Menu tab
+            n = len(self._hub.cards())
             if key in (K.Key_Left, K.Key_Right):
-                self._hub_focus = (self._hub_focus + (1 if key == K.Key_Right else -1)) % 4
+                self._hub_focus = (self._hub_focus + (1 if key == K.Key_Right else -1)) % n
                 self._sync_hub_focus()
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
-                (self._go_next, self._open_profile,
-                 self._open_season_info, self._confirm_main_menu)[self._hub_focus]()
+                (self._go_next, self._open_profile, self._open_season_info,
+                 self._open_honours, self._confirm_main_menu)[self._hub_focus]()
             return True
 
         if idx == 2:                                      # Your Profile owns its own sub-nav
@@ -4112,8 +4322,9 @@ class SeasonHubPage(QWizardPage):
                 self._wiz.suppress_next_sfx = True
             return True
 
-        if idx == 3:                                       # Season Info owns its own sub-nav
-            result = self._season_info.handle_key(key)
+        if idx in (3, 4):              # Season Info / Honours own their sub-nav
+            sub = self._season_info if idx == 3 else self._honours
+            result = sub.handle_key(key)
             gap = getattr(self._wiz, '_gap_filler', None)
             if gap is not None:
                 gap.update()
@@ -4132,6 +4343,10 @@ class SeasonHubPage(QWizardPage):
     def _open_season_info(self):
         self._season_info.reset()   # always land on the tab bar, not the last-viewed sub-tab
         self._stack.setCurrentIndex(3)
+
+    def _open_honours(self):
+        self._honours.reset()       # same 'no stale sub-tab' rule as the others
+        self._stack.setCurrentIndex(4)
 
     def _go_next(self):
         # "TO NEXT SEASON" (season just finished) goes through the off-season
@@ -4176,4 +4391,6 @@ class SeasonHubPage(QWizardPage):
         elif self._stack.currentIndex() == 3 and self._season_info.is_opened():
             # Same continuation for a full-bleed Season Info sub-view (Standings
             # or Calendar).
+            painter.fillRect(rect, _PANEL_TINT)
+        elif self._stack.currentIndex() == 4 and self._honours.is_opened():
             painter.fillRect(rect, _PANEL_TINT)

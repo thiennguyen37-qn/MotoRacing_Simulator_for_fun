@@ -2,12 +2,13 @@ import pandas as pd
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout,
                               QLabel, QFrame, QStackedWidget, QWidget, QLineEdit,
                               QDialog, QScrollArea)
-from PyQt6.QtGui import QFont, QColor, QPainter
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont, QColor, QPainter, QPixmap
+from PyQt6.QtCore import Qt, QTimer
 
 from app.widgets.video_bg import VideoBackground
 from app.pages.p_calendar import _MenuBar, _caps_label
 from app.pages.p_home import _BAND_CSS, _SBAR_H, _statusbar_font
+from app.pages.p_season_hub import _big_bike_pixmap
 from app.wizard import RAW, CAREER_SLOTS
 from src.loader import load_bikes
 
@@ -123,9 +124,9 @@ class _NameRow(QFrame):
         self._edit.setStyleSheet(f'color: {txt}; background: transparent; border: none;')
 
 
-# ── Value row (Age, Nationality, Manufacturer, Bike Number) ────────────────────
+# ── Value row (Age, Nationality, Bike Number) ─────────────────────────────────
 # No arrows — Enter opens a selection panel (grid for bike number, scrolling
-# list for the other three) instead of cycling in place.
+# list for the other two) instead of cycling in place.
 
 class _StepperRow(QFrame):
     def __init__(self, label: str):
@@ -191,6 +192,25 @@ class _ConfirmRow(QFrame):
         self._lbl.setStyleSheet(f'color: {txt}; letter-spacing: 2px;')
 
 
+# ── Carousel arrow (manufacturer page) ───────────────────────────────────────
+# Purely a hint that Left/Right does something — the app disables the mouse, so
+# these are never clicked, only mirrored by the key that moves the carousel.
+
+class _CarouselArrow(QLabel):
+    def __init__(self, glyph: str):
+        super().__init__(glyph)
+        self.setFixedSize(48, 96)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFont(QFont('Segoe UI', 34, QFont.Weight.Bold))
+        self.set_lit(False)
+
+    def set_lit(self, lit: bool):
+        """Briefly brightened as the matching key is pressed, so the carousel
+        acknowledges the input even when two bikes look alike."""
+        col = '#ffffff' if lit else '#e02840'
+        self.setStyleSheet(f'color: {col}; background: transparent; border: none;')
+
+
 # ── Career slot row (New/Load slot picker) ──────────────────────────────────
 
 class _SlotRow(QFrame):
@@ -247,7 +267,7 @@ class _SlotRow(QFrame):
         self._detail.setStyleSheet(f'color: {detail};')
 
 
-# ── List-picker row (Age / Nationality / Manufacturer selection panel) ─────────
+# ── List-picker row (Age / Nationality selection panel) ───────────────────────
 
 class _ListItemRow(QFrame):
     def __init__(self, text: str):
@@ -276,8 +296,13 @@ class _ListItemRow(QFrame):
 
 # ── Page ─────────────────────────────────────────────────────────────────────
 
-_FORM_ROWS = ['name', 'age', 'nat', 'manu', 'bike', 'confirm']
+# Manufacturer is deliberately NOT here: it gets a screen of its own after
+# CONFIRM (page 3), where the satellite bike can actually be shown.
+_FORM_ROWS = ['name', 'age', 'nat', 'bike', 'confirm']
 _AGE_MIN, _AGE_MAX, _AGE_DEFAULT = 18, 45, 25
+# Fixed box for the bike shot so switching manufacturers never shifts the rows
+# below it — the cutouts differ in aspect ratio.
+_BIKE_BOX_W, _BIKE_BOX_H, _BIKE_H = 440, 250, 230
 
 
 class CareerPage(QWizardPage):
@@ -307,7 +332,7 @@ class CareerPage(QWizardPage):
         self._menu_focus = 'new'     # 'new' | 'load'
         self._form_focus = 0         # index into _FORM_ROWS
         self.text_entry_active = False
-        # None | 'bike' (number grid) | 'age' | 'nat' | 'manu' (scrolling list)
+        # None | 'bike' (number grid) | 'age' | 'nat' (scrolling list)
         self._active_picker = None
         self._pick_num    = 1
         self._list_field  = None
@@ -391,11 +416,9 @@ class CareerPage(QWizardPage):
         self._name_row    = _NameRow()
         self._age_row     = _StepperRow('AGE')
         self._nat_row     = _StepperRow('NATIONALITY')
-        self._manu_row    = _StepperRow('MANUFACTURER')
         self._bike_row    = _StepperRow('BIKE NUMBER')
         self._confirm_row = _ConfirmRow('CONFIRM  →')
-        for w in (self._name_row, self._age_row, self._nat_row,
-                  self._manu_row, self._bike_row):
+        for w in (self._name_row, self._age_row, self._nat_row, self._bike_row):
             f_col.addWidget(w)
         f_col.addSpacing(10)
         f_col.addWidget(self._confirm_row)
@@ -404,6 +427,68 @@ class CareerPage(QWizardPage):
         fl.addLayout(f_center)
         fl.addStretch(3)
         self._pages.addWidget(form_w)
+
+        # ── Page 3: manufacturer picker (satellite-bike carousel) ─────────────
+        manu_w = QWidget()
+        manu_w.setStyleSheet('background: transparent;')
+        gl = QVBoxLayout(manu_w)
+        gl.setContentsMargins(36, 24, 36, 24)
+        gl.addStretch(2)
+
+        g_hdr = _caps_label('CHOOSE YOUR MANUFACTURER', size=12)
+        gl.addWidget(g_hdr, 0, Qt.AlignmentFlag.AlignHCenter)
+        gl.addSpacing(6)
+
+        g_sub = QLabel("You'll ride for their satellite team, not the factory squad")
+        g_sub.setFont(QFont('Segoe UI', 11))
+        g_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        g_sub.setStyleSheet('color: #888899; background: transparent; border: none;')
+        gl.addWidget(g_sub)
+        gl.addSpacing(14)
+
+        # Arrows sit either side of the bike and are keyboard-only cues (the
+        # whole app is arrow-key driven — nothing here is clickable).
+        carousel = QHBoxLayout()
+        carousel.setSpacing(18)
+        carousel.addStretch(1)
+        self._manu_prev = _CarouselArrow('‹')
+        carousel.addWidget(self._manu_prev, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._manu_bike = QLabel()
+        self._manu_bike.setFixedSize(_BIKE_BOX_W, _BIKE_BOX_H)
+        self._manu_bike.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._manu_bike.setStyleSheet('background: transparent; border: none;')
+        carousel.addWidget(self._manu_bike)
+        self._manu_next = _CarouselArrow('›')
+        carousel.addWidget(self._manu_next, 0, Qt.AlignmentFlag.AlignVCenter)
+        carousel.addStretch(1)
+        gl.addLayout(carousel)
+        gl.addSpacing(10)
+
+        self._manu_name = QLabel()
+        self._manu_name.setFont(QFont('Segoe UI', 22, QFont.Weight.Bold))
+        self._manu_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._manu_name.setStyleSheet(
+            'color: #ffffff; background: transparent; border: none;'
+            ' letter-spacing: 3px;')
+        gl.addWidget(self._manu_name)
+
+        self._manu_team = QLabel()
+        self._manu_team.setFont(QFont('Segoe UI', 12, QFont.Weight.Bold))
+        self._manu_team.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._manu_team.setStyleSheet(
+            'color: #888899; background: transparent; border: none;')
+        gl.addWidget(self._manu_team)
+        gl.addSpacing(20)
+
+        g_center = QHBoxLayout()
+        g_center.addStretch(1)
+        self._manu_confirm = _ConfirmRow('CONFIRM  →')
+        self._manu_confirm.setFixedWidth(420)
+        g_center.addWidget(self._manu_confirm)
+        g_center.addStretch(1)
+        gl.addLayout(g_center)
+        gl.addStretch(3)
+        self._pages.addWidget(manu_w)
 
         self._build_picker_panel()
         self._build_list_picker()
@@ -452,7 +537,7 @@ class CareerPage(QWizardPage):
             self._number_tiles[n] = tile
         pl.addWidget(grid_w, 0, Qt.AlignmentFlag.AlignHCenter)
 
-    # ── Floating list picker (Age / Nationality / Manufacturer) ───────────────
+    # ── Floating list picker (Age / Nationality) ──────────────────────────────
 
     def _build_list_picker(self):
         self._list_dim = QWidget(self)
@@ -481,7 +566,7 @@ class CareerPage(QWizardPage):
         self._list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         lp.addWidget(self._list_scroll)
 
-        # Options per field, built once. All three containers live inside one
+        # Options per field, built once. Both containers live inside one
         # QStackedWidget that is set on the scroll area exactly once — calling
         # QScrollArea.setWidget() again (e.g. to swap containers per field)
         # deletes whatever widget was set before it, which was crashing the
@@ -489,7 +574,6 @@ class CareerPage(QWizardPage):
         self._list_rows = {
             'age':  [_ListItemRow(str(a)) for a in range(_AGE_MIN, _AGE_MAX + 1)],
             'nat':  [_ListItemRow(n.upper()) for n in self._nationalities],
-            'manu': [_ListItemRow(m) for m in self._satellite_manus],
         }
         self._list_stack = QStackedWidget()
         self._list_stack_index = {}
@@ -508,7 +592,7 @@ class CareerPage(QWizardPage):
         super().resizeEvent(event)
         if self._active_picker == 'bike':
             self._layout_picker()
-        elif self._active_picker in ('age', 'nat', 'manu'):
+        elif self._active_picker in ('age', 'nat'):
             self._layout_list_picker()
         if self._toast.isVisible():
             self.place_bottom_overlay()
@@ -547,18 +631,19 @@ class CareerPage(QWizardPage):
         elif idx == 1:
             text = ('PICK AN EMPTY SLOT, OR OVERWRITE AN EXISTING ONE' if self._slot_mode == 'new'
                     else 'PICK A SLOT TO CONTINUE THAT CAREER')
+        elif idx == 3:
+            text = ('ENTER TO CONFIRM · ESC TO GO BACK')
         elif self._active_picker == 'bike':
             text = 'USE THE ARROWS TO BROWSE · ENTER TO PICK · ESC TO CANCEL'
-        elif self._active_picker in ('age', 'nat', 'manu'):
+        elif self._active_picker in ('age', 'nat'):
             text = 'USE ↑ / ↓ TO BROWSE · ENTER TO SELECT · ESC TO CANCEL'
         else:
             text = {
                 'name':    'TYPE A UNIQUE NAME FOR YOUR RIDER',
                 'age':     'PRESS ENTER TO CHOOSE YOUR AGE',
                 'nat':     'PRESS ENTER TO CHOOSE YOUR NATIONALITY',
-                'manu':    "PRESS ENTER TO CHOOSE YOUR MANUFACTURER — YOU'LL JOIN THEIR SATELLITE TEAM, NOT FACTORY",
                 'bike':    'PRESS ENTER TO PICK A FREE NUMBER (1-3 RESERVED FOR A TOP-3 SEASON FINISH)',
-                'confirm': 'PRESS ENTER TO CREATE THIS RIDER AND SET UP THEIR FIRST SEASON',
+                'confirm': 'PRESS ENTER TO GO ON AND PICK YOUR MANUFACTURER',
             }[_FORM_ROWS[self._form_focus]]
         self._toast.setText(text)
 
@@ -649,7 +734,7 @@ class CareerPage(QWizardPage):
             return True
         return True   # swallow everything else while the picker is open
 
-    # ── List picker (Age / Nationality / Manufacturer) ─────────────────────────
+    # ── List picker (Age / Nationality) ────────────────────────────────────────
 
     def _open_list_picker(self, field: str, title: str, current_index: int):
         self._active_picker = field
@@ -697,7 +782,7 @@ class CareerPage(QWizardPage):
         if key in (K.Key_Up, K.Key_Down):
             d = -1 if key == K.Key_Up else 1
             self._move_list_focus((self._list_focus + d) % len(rows))
-            # Scrolling a value list (age/nationality/manufacturer) isn't
+            # Scrolling a value list (age/nationality) isn't
             # discrete navigation — no 'navigate' SFX (see wizard.eventFilter).
             self._wiz.suppress_next_sfx = True
             return True
@@ -716,10 +801,55 @@ class CareerPage(QWizardPage):
             self._age = _AGE_MIN + i
         elif field == 'nat':
             self._nat_idx = i
-        elif field == 'manu':
-            self._manu_idx = i
         self._close_picker()
         self._refresh_form()
+
+    # ── Manufacturer page (page 3) ────────────────────────────────────────────
+
+    def _satellite_team(self, manu: str) -> str:
+        """The satellite team fielding `manu`, read from the pristine CSV grid
+        rather than wiz.df — a career loaded earlier in this session may have
+        left its own roster in place (wizard.apply_roster_to_df), and
+        _confirm_new_rider resets to that same base grid anyway."""
+        base = self._wiz._base_df
+        row = base[(base.manufacturer == manu) & (base.team_status == 'satellite')]
+        return str(row.iloc[0]['team']) if len(row) else ''
+
+    def _open_manu_page(self):
+        self._pages.setCurrentIndex(3)
+        self._refresh_manu_page()
+
+    def _refresh_manu_page(self):
+        manu = self._satellite_manus[self._manu_idx]
+        team = self._satellite_team(manu)
+        pix = _big_bike_pixmap(team, height=_BIKE_H) if team else None
+        self._manu_bike.setPixmap(pix if pix is not None else QPixmap())
+        self._manu_name.setText(manu.upper())
+        self._manu_team.setText(team.upper())
+        self._manu_confirm.set_state(True, True)
+        self._update_toast()
+
+    def _step_manu(self, d: int):
+        self._manu_idx = (self._manu_idx + d) % len(self._satellite_manus)
+        self._refresh_manu_page()
+        # Flash the arrow that was pressed, then settle back.
+        arrow = self._manu_prev if d < 0 else self._manu_next
+        arrow.set_lit(True)
+        QTimer.singleShot(110, lambda: arrow.set_lit(False))
+
+    def _manu_key(self, key: int) -> bool:
+        K = Qt.Key
+        if key in (K.Key_Left, K.Key_Right):
+            self._step_manu(-1 if key == K.Key_Left else 1)
+            return True
+        if key in (K.Key_Return, K.Key_Enter, K.Key_Space):
+            self._confirm_new_rider()
+            return True
+        if key in (K.Key_Escape, K.Key_Backspace):
+            self._pages.setCurrentIndex(2)   # back to the four-field form
+            self._refresh_form()
+            return True
+        return True   # swallow everything else on this page
 
     # ── Background: shared video + darkening overlay ──────────────────────────
 
@@ -774,9 +904,11 @@ class CareerPage(QWizardPage):
             return self._menu_key(key)
         if idx == 1:
             return self._slot_picker_key(key)
+        if idx == 3:
+            return self._manu_key(key)
         if self._active_picker == 'bike':
             return self._picker_key(key)
-        if self._active_picker in ('age', 'nat', 'manu'):
+        if self._active_picker in ('age', 'nat'):
             return self._list_picker_key(key)
         return self._form_key(key)
 
@@ -910,15 +1042,12 @@ class CareerPage(QWizardPage):
             if row == 'nat':
                 self._open_list_picker('nat', 'SELECT NATIONALITY', self._nat_idx)
                 return True
-            if row == 'manu':
-                self._open_list_picker('manu', 'SELECT MANUFACTURER', self._manu_idx)
-                return True
             if row == 'bike':
                 self._open_picker()
                 return True
             if row == 'confirm':
                 if self._is_valid_name():
-                    self._confirm_new_rider()
+                    self._open_manu_page()
                 return True
 
         return False        # unhandled key
@@ -942,8 +1071,7 @@ class CareerPage(QWizardPage):
         return name.lower() not in {str(n).lower() for n in base['name']}
 
     def _refresh_focus(self):
-        rows = [self._name_row, self._age_row, self._nat_row,
-                self._manu_row, self._bike_row]
+        rows = [self._name_row, self._age_row, self._nat_row, self._bike_row]
         for i, r in enumerate(rows):
             r.set_focused(self._form_focus == i)
         self._confirm_row.set_state(
@@ -955,7 +1083,6 @@ class CareerPage(QWizardPage):
         self._age_row.set_value(str(self._age))
         nat = self._nationalities[self._nat_idx]
         self._nat_row.set_value(nat.upper())
-        self._manu_row.set_value(self._satellite_manus[self._manu_idx])
         self._bike_row.set_value(f'#{self._bike_number}')
         self._refresh_focus()
 

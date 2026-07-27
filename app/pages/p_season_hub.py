@@ -12,8 +12,7 @@ from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint, QSiz
                           pyqtSignal, QPropertyAnimation, QParallelAnimationGroup,
                           QSequentialAnimationGroup, QEasingCurve, QAbstractAnimation)
 
-from app.pages.p_gallery import (STATS, _make_scroll_area, _BIKES_DIR, _BIKE_IMAGE,
-                                  _RiderDetail)
+from app.pages.p_gallery import (STATS, _make_scroll_area, _BIKES_DIR, _BIKE_IMAGE)
 from app.pages.p_calendar import _SlotBar
 from app.pages.p_home import ExitDialog
 from app.pages.p_history import (_aggregate_riders, _build_rider_race_matrix,
@@ -546,9 +545,16 @@ class _SideSubHub(QWidget):
 # ── Your Profile: Basic Info ───────────────────────────────────────────────────
 
 class _BasicInfoView(QWidget):
+    """`title` of None drops the heading, and `centred` balances the leading
+    stretch with a trailing one so the block sits mid-screen instead of hanging
+    off the bottom — both for Season Info's rider page, which reuses this panel
+    for an arbitrary rider and wants it as a plain, centred read-out. Your
+    Profile keeps the default: a heading, and bottom-anchored so the columns
+    line up as described below."""
+
     FIELDS = ['NAME', 'AGE', 'NATIONALITY', 'BIKE NUMBER', 'TEAM', 'MANUFACTURER']
 
-    def __init__(self):
+    def __init__(self, title: str | None = 'BASIC INFO', centred: bool = False):
         super().__init__()
         self.setStyleSheet('background: transparent;')
         outer = QVBoxLayout(self)
@@ -565,11 +571,13 @@ class _BasicInfoView(QWidget):
         outer.setContentsMargins(48, 24, 48, 24)
         outer.setSpacing(0)
 
-        title = QLabel('BASIC INFO')
-        title.setFont(QFont('Segoe UI', 27, QFont.Weight.Bold))
-        title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
-        outer.addWidget(title)
-        outer.addSpacing(22)
+        if title is not None:
+            title_lbl = QLabel(title)
+            title_lbl.setFont(QFont('Segoe UI', 27, QFont.Weight.Bold))
+            title_lbl.setStyleSheet(
+                'color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
+            outer.addWidget(title_lbl)
+            outer.addSpacing(22)
 
         body = QWidget()
         body.setStyleSheet('background: transparent;')
@@ -598,6 +606,8 @@ class _BasicInfoView(QWidget):
             row.addWidget(vl)
             fields_lay.addLayout(row)
             self._values[key] = vl
+        if centred:
+            fields_lay.addStretch(1)
         body_lay.addWidget(fields_w, 1)
 
         # RIGHT column: bike image, then CAREER SUMMARY directly under it —
@@ -636,6 +646,10 @@ class _BasicInfoView(QWidget):
         self._summary_lay = QVBoxLayout(self._summary_holder)
         self._summary_lay.setContentsMargins(0, 0, 0, 0)
         right_lay.addWidget(self._summary_holder, 0, Qt.AlignmentFlag.AlignHCenter)
+        if centred:
+            # Both columns get the trailing stretch, so centring the block
+            # doesn't disturb the bike/field-row alignment tuned above.
+            right_lay.addStretch(1)
 
         body_lay.addWidget(right_w, 1)
 
@@ -3401,9 +3415,13 @@ class _RiderInfoScreen(QWidget):
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self._grid = _RiderGridView(wiz)
-        # Placeholder until the rider page is specified: Gallery's own panel,
-        # which at least shows the right rider.
-        self._detail = _RiderDetail()
+        self._totals: dict = {}
+        # The very same panel Your Profile opens on, fed with whichever rider
+        # was picked instead of the career one — so an AI rider's page carries
+        # the same fields and the same CAREER SUMMARY tallies as the player's.
+        # No heading here: which rider you opened is already the first field,
+        # and 'BASIC INFO' only names the tab it came from over in Your Profile.
+        self._detail = _BasicInfoView(title=None, centred=True)
         detail_page = QWidget()
         detail_page.setStyleSheet('background: transparent;')
         dl = QVBoxLayout(detail_page)
@@ -3420,7 +3438,11 @@ class _RiderInfoScreen(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._stack)
 
-    def load(self):
+    def load(self, career_totals: dict | None = None):
+        """`career_totals` is _aggregate_riders() over every season on record,
+        the live one included — the same tally Your Profile reads, so a rider's
+        page here counts this season's races too."""
+        self._totals = career_totals or {}
         self._grid.reload()
         self._stack.setCurrentIndex(0)
 
@@ -3447,7 +3469,9 @@ class _RiderInfoScreen(QWidget):
         if key in (K.Key_Return, K.Key_Enter, K.Key_Space):
             rider = self._grid.current()
             if rider is not None:
-                self._detail.load(rider)
+                name = str(rider['name'])
+                entry = self._totals.get(name)
+                self._detail.load(rider, {'name': name, **entry} if entry else None)
                 self._detail_scroll.verticalScrollBar().setValue(0)
                 self._stack.setCurrentIndex(1)
             return None
@@ -3458,9 +3482,12 @@ class _RiderInfoScreen(QWidget):
     def paintEvent(self, event):
         # Both pages below are transparent, so the near-opaque backdrop belongs
         # here — it is also what lets _SideSubHub add this view with no tint
-        # wrap of its own.
+        # wrap of its own. _PANEL_TINT exactly, not a shade of it: the same
+        # colour covers the strip QWizard reserves below the page (see
+        # SeasonHubPage.paint_gap_overlay), and anything else leaves a band
+        # along the bottom edge that reads as the overlay stopping short.
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(5, 5, 14, 218))
+        p.fillRect(self.rect(), _PANEL_TINT)
 
 
 class _SeasonInfoScreen(_SideSubHub):
@@ -3480,13 +3507,13 @@ class _SeasonInfoScreen(_SideSubHub):
         ])
 
     def load(self, riders: list, teams: list, manu: list, season_df,
-            rounds_detail: list | None):
+            rounds_detail: list | None, career_totals: dict | None = None):
         self._standings.load(riders, teams, manu, rounds_detail)
         self._calendar_view.load(season_df)
         bar = self._calendar_view.scrollbar()
         if bar is not None:
             bar.setValue(0)
-        self._rider_info.load()
+        self._rider_info.load(career_totals)
 
 
 # ── Between-GP map transition ─────────────────────────────────────────────────
@@ -3791,9 +3818,13 @@ class SeasonHubPage(QWizardPage):
                 'stats': _stats_from_rounds_detail(live_rounds),
                 'rounds_detail': live_rounds,
             }]
+        # Aggregated once for the whole page: Your Profile takes the career
+        # rider's row out of it, Season Info's RIDERS tab reads the same tally
+        # for whichever rider is opened there.
+        career_totals = _aggregate_riders(seasons_for_rec) if seasons_for_rec else {}
         rec = None
-        if rider and seasons_for_rec:
-            entry = _aggregate_riders(seasons_for_rec).get(name)
+        if rider:
+            entry = career_totals.get(name)
             if entry is not None:
                 rec = {'name': name, **entry}    # _build_rider_race_matrix expects rec['name']
         self._profile.load(rider, rec)
@@ -3940,7 +3971,8 @@ class SeasonHubPage(QWizardPage):
                                  result_title=result_title,
                                  champion=champion, champion_year=champion_year)
         self._season_info.load(standings, team_standings, manu_standings,
-                               self._wiz.season_df, current_rounds_detail)
+                               self._wiz.season_df, current_rounds_detail,
+                               career_totals)
 
     def initializePage(self):
         # Arrival from Calendar: either a brand-new round (session_index is

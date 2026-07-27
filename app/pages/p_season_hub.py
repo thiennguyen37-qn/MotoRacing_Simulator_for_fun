@@ -3205,7 +3205,9 @@ class _RiderInfoScreen(QWidget):
         K = Qt.Key
         if key in (K.Key_Up, K.Key_Down):
             self._view.move_selection(key == K.Key_Down)
-            return None          # a selection move — the 'navigate' click fits
+            # Browsing a long list, not moving a tab focus — 'scroll' is what
+            # tells SeasonHubPage to suppress the wizard's 'navigate' click.
+            return 'scroll'
         if key in (K.Key_Escape, K.Key_Backspace):
             return 'close'
         return None              # swallow the rest rather than let it fall through

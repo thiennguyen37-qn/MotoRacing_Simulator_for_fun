@@ -545,6 +545,27 @@ class _SideSubHub(QWidget):
 
 # ── Your Profile: Basic Info ───────────────────────────────────────────────────
 
+def _missing(v) -> bool:
+    """True for a field that isn't there at all.
+
+    Riders reach this panel two ways: as dicts straight from roster.json, where
+    an absent field is absent, and as rows of wiz.df, where pandas fills the gap
+    with NaN because other rows in the frame do have the column. NaN is not None
+    and int(NaN) raises, so both have to be caught.
+    """
+    return v is None or (isinstance(v, float) and v != v)
+
+
+def _contract_value(rider: dict) -> str:
+    """The CONTRACT field's value: which season the current deal runs to.
+
+    Blank-dashed rather than guessed for a rider with no contract on record — an
+    older save, or the grid outside career mode.
+    """
+    until = rider.get('contract_until')
+    return '—' if _missing(until) else f'End of {int(until)}'
+
+
 class _BasicInfoView(QWidget):
     """`title` of None drops the heading, and `centred` balances the leading
     stretch with a trailing one so the block sits mid-screen instead of hanging
@@ -553,7 +574,8 @@ class _BasicInfoView(QWidget):
     Profile keeps the default: a heading, and bottom-anchored so the columns
     line up as described below."""
 
-    FIELDS = ['NAME', 'AGE', 'NATIONALITY', 'BIKE NUMBER', 'TEAM', 'MANUFACTURER']
+    FIELDS = ['NAME', 'AGE', 'NATIONALITY', 'BIKE NUMBER', 'TEAM',
+              'MANUFACTURER', 'CONTRACT']
 
     def __init__(self, title: str | None = 'BASIC INFO', centred: bool = False):
         super().__init__()
@@ -629,11 +651,16 @@ class _BasicInfoView(QWidget):
         # One field row's height+spacing is 73px (label 20 + row-gap 2 + value
         # 36 + fields_lay spacing 15). Below the bike, CAREER SUMMARY's title
         # (20) + spacing (10) + the stat tiles (43) already add up to 73 on
-        # their own — so this spacer adds exactly one MORE row-step (73px) to
-        # put two full steps between the (alpha-cropped, no hidden padding)
-        # bike's bottom and the stat tiles' bottom, matching the two-row gap
-        # between BIKE NUMBER and MANUFACTURER on the left.
-        right_lay.addSpacing(73)
+        # their own — so each 73 added here buys one more row-step between the
+        # (alpha-cropped, no hidden padding) bike's bottom and the stat tiles'
+        # bottom.
+        #
+        # Both columns are bottom-anchored against each other, so the number of
+        # steps has to match how far BIKE NUMBER sits above the LAST field row.
+        # CONTRACT made that three (BIKE NUMBER, TEAM, MANUFACTURER, CONTRACT),
+        # where it used to be two — hence 146 rather than 73. Add or remove a
+        # field and this has to move with it, or the bike drifts off BIKE NUMBER.
+        right_lay.addSpacing(146)
 
         summary_title = QLabel('CAREER SUMMARY')
         summary_title.setFont(QFont('Segoe UI', 11))
@@ -663,6 +690,7 @@ class _BasicInfoView(QWidget):
         self._values['BIKE NUMBER'].setText(f"#{rider.get('bike_number', '—')}")
         self._values['TEAM'].setText(str(rider.get('team', '—')))
         self._values['MANUFACTURER'].setText(str(rider.get('manufacturer', '—')))
+        self._values['CONTRACT'].setText(_contract_value(rider))
         pix = _big_bike_pixmap(rider.get('team', ''), height=236)
         self._bike_lbl.setPixmap(pix if pix is not None else QPixmap())
 
@@ -3355,6 +3383,31 @@ class _RiderGridView(QWidget):
         self._scroll.setWidget(body)
         root.addWidget(self._scroll, 1)
 
+    def _contract_map(self) -> dict:
+        """{rider name: contract_until} for this career, or {} outside one.
+
+        Two sources, because the grid has two: the AI riders' deals live in the
+        slot's roster.json, and the career rider's in their own rider.json — the
+        player is not part of the roster (see transfers.run_silly_season).
+        """
+        wiz = self._wiz
+
+        def read(fn):
+            """Neither loader is safe to call outside a career — no slot is set,
+            so they raise rather than return empty."""
+            try:
+                return fn() or {}
+            except Exception:
+                return {}
+
+        out = {str(r.get('name', '')): r['contract_until']
+               for r in read(wiz.load_roster).get('riders') or []
+               if r.get('contract_until') is not None}
+        rider = getattr(wiz, 'pending_career_rider', None) or read(wiz.load_career_rider)
+        if rider.get('contract_until') is not None:
+            out[str(rider.get('name', ''))] = rider['contract_until']
+        return out
+
     def reload(self):
         for row in self._rows:
             row.setParent(None)
@@ -3368,9 +3421,19 @@ class _RiderGridView(QWidget):
         tail = df.iloc[int(getattr(self._wiz, '_base_rider_count', len(df))):]
         self._player_name = str(tail.iloc[0]['name']) if len(tail) else ''
 
+        # Contracts are not in wiz.df: apply_roster_to_df keeps the frame to the
+        # race engine's own columns on purpose, so contract_until stays in
+        # roster.json where the transfer market owns it. Merge it back by name
+        # here rather than widening the frame — the rider page wants it, the
+        # engine does not. Championship and Random Race have no roster at all,
+        # which is correct: contracts only exist in a career.
+        contracts = self._contract_map()
+
         squads: dict = {}
         for _, row_s in df.iterrows():
             r = row_s.to_dict()
+            if str(r.get('name', '')) in contracts:
+                r['contract_until'] = contracts[str(r['name'])]
             squads.setdefault(str(r.get('team', '')), []).append(r)
         for riders in squads.values():
             riders.sort(key=lambda r: int(r['bike_number']))

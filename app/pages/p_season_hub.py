@@ -1153,8 +1153,14 @@ def _stats_from_rounds_detail(rounds_detail_list: list) -> dict:
 def _track_history(seasons_for_rec: list, circuit_name: str | None, limit: int = 5) -> tuple:
     """(winners, polesitters) at `circuit_name` across every season on
     record (archived + the live in-progress one folded into
-    `seasons_for_rec`, oldest to newest) — each a (year, name) tuple, most
-    recent first, capped to `limit`.
+    `seasons_for_rec`, oldest to newest) — each a
+    (year, name, team, manufacturer) tuple, most recent first, capped to `limit`.
+
+    The team comes out of the archived result row, not from any current lookup:
+    these are historical lines, so they have to name the team the rider actually
+    rode for that season. Reading it off today's grid instead put a 2026 pole
+    down to the team the rider moved to in 2027 — and coloured the row in that
+    team's colours too.
 
     Winners are read per-race (a round can run more than one race, each
     with its own winner); poles are read once per round from its first
@@ -1162,6 +1168,11 @@ def _track_history(seasons_for_rec: list, circuit_name: str | None, limit: int =
     double-counting a round's shared grid."""
     if not circuit_name:
         return [], []
+
+    def entry(year, row):
+        return (year, row['name'], str(row.get('team', '')),
+                str(row.get('manufacturer', '')))
+
     winners, poles = [], []
     for season in sorted(seasons_for_rec, key=lambda s: s.get('year', 0)):
         year = season.get('year', '')
@@ -1172,11 +1183,11 @@ def _track_history(seasons_for_rec: list, circuit_name: str | None, limit: int =
             for race in races:
                 winner = next((r for r in race if not r.get('dnf') and int(r.get('pos', 0)) == 1), None)
                 if winner is not None:
-                    winners.append((year, winner['name']))
+                    winners.append(entry(year, winner))
             if races:
                 pole = next((r for r in races[0] if r.get('pole')), None)
                 if pole is not None:
-                    poles.append((year, pole['name']))
+                    poles.append(entry(year, pole))
     return winners[-limit:][::-1], poles[-limit:][::-1]
 
 
@@ -2062,14 +2073,20 @@ class _TrackHistoryPanel(QWidget):
                 l.setFont(QFont('Segoe UI', 9, QFont.Weight.Bold))
 
             if i < len(entries):
-                year, name = entries[i]
-                info = self._names_map.get(name, {})
-                color = TEAM_COLOR.get(info.get('team', '')) or MANU_COLOR.get(
-                    info.get('manufacturer', ''), _DEFAULT_COLOR)
+                year, name, team, manu = entries[i]
+                # The team they rode for THAT season, straight off the result
+                # row — not a lookup against the current grid, which would
+                # relabel and recolour history every time somebody transferred.
+                # names_map is only a fallback for archives written before the
+                # result rows carried a team.
+                if not team and not manu:
+                    info = self._names_map.get(name, {})
+                    team, manu = info.get('team', ''), info.get('manufacturer', '')
+                color = TEAM_COLOR.get(team) or MANU_COLOR.get(manu, _DEFAULT_COLOR)
                 row.setStyleSheet(f'background: {row_bg(color).name()}; border-radius: 6px; border: none;')
                 text_color = '#ffffff'
                 name_lbl.setFullText(str(name).upper())
-                manu_lbl.setFullText(str(info.get('manufacturer', '—')).upper())
+                manu_lbl.setFullText(str(manu or '—').upper())
                 year_lbl.setText(str(year))
             else:
                 row.setStyleSheet('background: rgba(255,255,255,10); border-radius: 6px; border: none;')

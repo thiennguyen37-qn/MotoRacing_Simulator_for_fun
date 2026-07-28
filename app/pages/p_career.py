@@ -11,6 +11,7 @@ from app.pages.p_home import _BAND_CSS, _SBAR_H, _statusbar_font
 from app.pages.p_season_hub import _big_bike_pixmap
 from app.wizard import RAW, CAREER_SLOTS
 from src.loader import load_bikes
+from src.transfers import objective_for, rating, team_table
 
 # Every UN member state (+ a few common non-member entries), text only — no
 # flag assets exist for most of these, so the Nationality row is text-only.
@@ -1122,6 +1123,18 @@ class CareerPage(QWizardPage):
 
         wiz.reset_career_progress()
         rider['age_year'] = int(wiz.season_year)   # after the reset to START_YEAR
+
+        # A one-year deal, same as every AI rider gets in 2026, so the first
+        # off-season is a real shake-up for the player too. The objective comes
+        # from where a rider of their calibre should finish on this bike — which
+        # for a debutant on a satellite machine is "see the season out", so the
+        # first contract asks nothing beyond turning up. It starts biting once
+        # they are quick enough for the target to land inside the top 24.
+        rider['contract_from']  = int(wiz.season_year)
+        rider['contract_until'] = int(wiz.season_year)
+        rider['objective'] = objective_for(team_table(RAW), str(team),
+                                           rating(rider), 1)
+        rider['misses'] = 0
         # Nothing on disk yet: the slot is only claimed — and its previous
         # rider/save/archive dropped — once this rider's first season actually
         # starts, so quitting during calendar setup leaves the old career

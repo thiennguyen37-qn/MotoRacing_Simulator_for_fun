@@ -1,5 +1,4 @@
 import json
-import random
 import sys
 from pathlib import Path
 
@@ -788,11 +787,16 @@ class MotoWizard(QWizard):
     def build_initial_roster(self, year):
         """A fresh career's roster: the CSV grid, plus a contract for everyone.
 
-        Contracts run 1-2 seasons, assigned at random so they don't all expire in
-        the same off-season — a grid where every seat opens at once would churn
-        in waves instead of a steady trickle. `contract_until` is the last season
-        the deal covers (inclusive), so a rider is a free agent in the Y -> Y+1
-        off-season when `contract_until <= Y`.
+        Every seat opens at the end of the first season: the whole grid signs a
+        one-year deal, so the career's first off-season is a real shake-up rather
+        than a quarter of the field trickling out. `contract_until` is the last
+        season the deal covers (inclusive), so a rider is a free agent in the
+        Y -> Y+1 off-season when `contract_until <= Y`.
+
+        That cohort does not stay in lockstep: renewals run two seasons, but
+        anyone who changes team goes through transfers.sign(), which rolls 1-2
+        years, and that is enough to spread the expiries back out within a few
+        seasons. See contracts.md for the measurements.
 
         The career rider takes a seat rather than being added on top of the 24,
         so their team's weaker rider makes way here and goes into the career's
@@ -805,7 +809,7 @@ class MotoWizard(QWizard):
             # and json.dumps(default=int) would silently truncate the float
             # ratings, so unwrap them here instead.
             rider = {k: (v.item() if hasattr(v, 'item') else v) for k, v in rec.items()}
-            rider['contract_until'] = year + random.choice((0, 1))
+            rider['contract_until'] = year
             riders.append(rider)
 
         # Read from disk rather than taken as an argument: this runs from

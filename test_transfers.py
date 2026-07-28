@@ -20,12 +20,18 @@ import statistics
 import sys
 
 import numpy as np
+import pandas as pd
 
 from src.engine import circuit_weights, perf_score_race
 from src.loader import load_circuits, load_riders
-from src.transfers import (DISPLACE_STATS, RIDER_STATS, displace_rating,
-                           drop_for_player, expected_rank, pool_entry,
-                           run_silly_season, seat_player, team_table)
+from src.transfers import (CONTRACT_TERMS, DISPLACE_STATS, GRID_SIZE,
+                           MOVE_YEARS, POOL_STATS, PROMOTE_YEARS, RENEW_FAILED,
+                           RENEW_KEEP, RENEW_YEARS, RIDER_STATS, ROOKIE_YEARS,
+                           SALVAGE_PEAK_AGE, baseline_finish, displace_rating,
+                           drop_for_player, drop_tolerance, expected_rank,
+                           objective_for, pool_entry, renew_probability,
+                           run_silly_season, salvage_appeal, salvage_rank,
+                           seat_player, sign_player_contract, team_table)
 
 RAW      = 'data/raw'
 SEASONS  = 25
@@ -79,7 +85,9 @@ def run_career(seed, seasons=SEASONS, weights=None):
     riders = []
     for rec in base:
         r = {k: (v.item() if hasattr(v, 'item') else v) for k, v in rec.items()}
-        r['contract_until'] = 2026 + rng.choice((0, 1))
+        # Matches wizard.build_initial_roster: the whole grid opens on a one-year
+        # deal, so season one's off-season is a real shake-up.
+        r['contract_until'] = 2026
         riders.append(r)
     roster = {'year': 2026, 'riders': riders, 'retired': [], 'pool_used': []}
 
@@ -105,8 +113,10 @@ def main():
     medians, tops, ages, corrs, rookie_counts, pool_used_end = [], [], [], [], [], []
     drop_counts, left_counts, all_numbers = [], [], []
     age_stay, age_left, young, old = [], [], [], []
+    young_fall, old_fall = [], []
     baseline_stats = {}
 
+    moved = 0
     for seed in range(SEEDS):
         gone = set()          # dropped for underperformance — must stay gone
         for year, out, roster in run_career(seed, weights=weights):
@@ -186,6 +196,43 @@ def main():
             rep.check('tan binh khong nhieu hon so nguoi roi giai',
                       len(out.rookies) <= vacancies,
                       f'seed{seed} {year}: {len(out.rookies)} rookie / {vacancies} trong')
+            # ── how long a deal runs is decided by how the rider got there ─────
+            # transfer_flow: staying put, being promoted or arriving as a rookie
+            # all buy two seasons; taking a seat somewhere new after your contract
+            # lapsed buys one, so you have to prove it again straight away.
+            rep.check('tan binh ky dung 2 nam',
+                      all(int(r['contract_until']) == year + ROOKIE_YEARS
+                          for r in out.rookies),
+                      f'seed{seed} {year}: '
+                      f'{[(r["name"], r["contract_until"]) for r in out.rookies][:2]}')
+            after = {r['name']: int(r['contract_until']) for r in riders}
+            for m in out.moves:
+                want = (PROMOTE_YEARS if m['kind'] == 'promote' else MOVE_YEARS)
+                got = after.get(m['name'])
+                rep.check(f'chuyen dang "{m["kind"]}" -> ky dung {want} nam',
+                          got == year + want,
+                          f'{m["name"]} {m["from"]}->{m["to"]}: het han {got}, '
+                          f'mong doi {year + want}')
+            # Anyone who neither moved nor debuted was kept on by their own team,
+            # which is a two-year deal.
+            touched = {m['name'] for m in out.moves} | {r['name'] for r in out.rookies}
+            for r in riders:
+                if r['name'] in touched:
+                    continue
+                rep.check('giu lai boi doi cu -> ky dung 2 nam',
+                          int(r['contract_until']) >= year + 1,
+                          f'{r["name"]}: {r["contract_until"]} vs mua {year}')
+
+            # ── the market still moves people between teams ───────────────────
+            # The single most dangerous failure mode in this module, because it
+            # is silent: promotion and poaching both select on out_of_contract(),
+            # so stamping a renewal too early empties their candidate lists and
+            # both paths stop firing. Nothing errors — every seat still gets
+            # filled, by salvage and rookies — and the only visible symptom is
+            # that strong teams quietly start signing the riders nobody wanted.
+            # Counted over the career rather than per season, since a single
+            # quiet winter is legitimate.
+            moved += sum(1 for m in out.moves if m['kind'] in ('promote', 'hire'))
 
             # ── numbers for the balance report ────────────────────────────────
             rat = [statistics.fmean(float(r[s]) for s in RIDER_STATS) for r in riders]
@@ -202,9 +249,22 @@ def main():
                     young.append(bool(d.get('landed')))
                 elif int(d['age']) >= 33:
                     old.append(bool(d.get('landed')))
+                # How far down the grid the move took them, in bike power. The
+                # young are meant to land near what they left and the veterans
+                # to fall away — see salvage_rank / drop_tolerance.
+                if d.get('landed'):
+                    fall = team_power[d['team']] - team_power[d['landed']]
+                    (young_fall if int(d['age']) <= SALVAGE_PEAK_AGE
+                     else old_fall).append(fall)
             pw = [team_power[r['team']] for r in riders]
             corrs.append(float(np.corrcoef(pw, rat)[0, 1]))
         pool_used_end.append(len(roster['pool_used']))
+
+    # Roughly one a season is the floor; the measured rate is far above it, so
+    # this only trips if the path has actually stopped working rather than been
+    # a bit quiet.
+    rep.check('promote/chieu mo van chay', moved >= SEEDS * SEASONS * 0.5,
+              f'{moved} vu trong {SEEDS * SEASONS} mua')
 
     structural_ok = rep.done('Bat bien cau truc')
 
@@ -231,8 +291,15 @@ def main():
     # Real seasons produce two or three genuine newcomers, not eight. Riders who
     # lose a seat drop down the grid instead of vanishing, which is what keeps
     # this near the retirement rate rather than double it.
+    #
+    # The bar was 2.2 when only a badly underperforming factory rider could lose
+    # a seat. Rolling every expiring contract — satellite seats included — costs
+    # about a third of a rookie a season, which is the known and accepted price
+    # of that rule (contracts.md). The guard that actually matters is the pool
+    # check below: 2.4 a season still leaves the 100-rider pool good for ~42
+    # seasons, longer than any career anyone will play.
     rpm = statistics.fmean(rookie_counts)
-    bal.check('tan binh/mua <= 2.2', rpm <= 2.2, f'{rpm:.2f}')
+    bal.check('tan binh/mua <= 2.4', rpm <= 2.4, f'{rpm:.2f}')
     kept = 1.0 - (statistics.fmean(left_counts)
                   / max(statistics.fmean(drop_counts), 1e-9))
     bal.check('70-80% nguoi mat ghe o lai luoi', 0.68 <= kept <= 0.82, f'{kept*100:.0f}%')
@@ -240,11 +307,28 @@ def main():
     # would hit the target percentage while making no sense: teams lower down
     # sign a rider who lost a seat because he still has something left, not at
     # random.
-    bal.check('nguoi o lai tre hon nguoi roi giai it nhat 3 tuoi',
-              statistics.fmean(age_left) - statistics.fmean(age_stay) >= 3.0,
+    #
+    # These three were calibrated when the only way to lose a seat was to
+    # underperform badly at a factory team — 1.24 riders a season, already
+    # filtered for "was bad". The renewal roll vacates 4.00 seats a season and is
+    # mostly luck, so the riders looking for a ride are now close to a fair
+    # sample of the grid rather than its rejects, and age separates them less
+    # sharply. What the thresholds still guard is that salvage_appeal's age
+    # penalty bites at all; the grid-wide age check above is what proves the
+    # field does not get old.
+    bal.check('nguoi o lai tre hon nguoi roi giai it nhat 1.5 tuoi',
+              statistics.fmean(age_left) - statistics.fmean(age_stay) >= 1.5,
               f'o lai {statistics.fmean(age_stay):.1f} / roi {statistics.fmean(age_left):.1f}')
-    bal.check('duoi 30 tuoi thi hau het o lai', young_kept >= 0.90, f'{young_kept*100:.0f}%')
-    bal.check('tu 33 tuoi tro len thi hau het roi giai', old_kept <= 0.25, f'{old_kept*100:.0f}%')
+    bal.check('duoi 30 tuoi thi hau het o lai', young_kept >= 0.80, f'{young_kept*100:.0f}%')
+    bal.check('tu 33 tuoi tro len thi phan lon roi giai', old_kept <= 0.35, f'{old_kept*100:.0f}%')
+    # …and HOW FAR they fall has to separate too. The median rather than the mean:
+    # both bands keep a long tail out to the full 19.6 of grid power, because
+    # salvage_rank is a preference and not a bar — when the only seat going is at
+    # the back, a 23-year-old still takes it.
+    y_fall = statistics.median(young_fall) if young_fall else 0.0
+    o_fall = statistics.median(old_fall) if old_fall else 0.0
+    bal.check('tre tut it hon gia it nhat 1.0 diem xe', o_fall - y_fall >= 1.0,
+              f'<=28: {y_fall:.1f} / >28: {o_fall:.1f}')
     spread = len(set(all_numbers)) / max(len(all_numbers), 1)
     bal.check('so xe rai deu 4-99 (khong dồn ve so nho)',
               statistics.fmean(all_numbers) > 40, f'TB {statistics.fmean(all_numbers):.0f}')
@@ -292,16 +376,22 @@ def player_checks(weights):
             riders.append(r)
         return {'year': year, 'riders': riders, 'retired': [], 'pool_used': []}
 
-    def make_player(team='Inferno Factory', rating=85.0, contract=2027):
+    def make_player(team='Inferno Factory', rating=85.0, contract=2027,
+                    objective=-1):
+        """A career rider on `team`. `objective` defaults to whatever a one-year
+        deal for that seat and calibre would actually ask for; pass None for a
+        contract with no target, or a number to pin it."""
         row = teams[teams.team == team].iloc[0]
         p = {'name': 'CAREER RIDER', 'age': 24, 'nationality': 'Vietnam',
              'bike_number': 46, 'team': team, 'manufacturer': str(row['manufacturer']),
              'team_status': str(row['team_status']), 'contract_until': contract,
              'top_speed': int(row['top_speed']), 'acceleration': int(row['acceleration']),
              'bike_braking': int(row['braking']), 'bike_cornering': int(row['cornering']),
-             'stability': int(row['stability'])}
+             'stability': int(row['stability']), 'misses': 0}
         for s in RIDER_STATS:
             p[s] = rating
+        p['objective'] = (objective_for(teams, team, rating, 1)
+                          if objective == -1 else objective)
         return p
 
     def market(player, place):
@@ -355,6 +445,61 @@ def player_checks(weights):
     safe = make_player('Ducati Factory Racing', 72.0, contract=2028)
     out = market(safe, 24)
     rep.check('con hop dong thi khong bi sa thai', not out.player_dropped)
+    # …and the protection cuts both ways: a rider under contract is off the
+    # market entirely, so the one seat on offer is the one they already have.
+    # This is what a two-year deal actually buys, and what it costs.
+    rep.check('con hop dong thi chi co mot offer = doi hien tai',
+              len(out.player_offers) == 1
+              and out.player_offers[0].team == 'Ducati Factory Racing'
+              and out.player_offers[0].current,
+              [o.team for o in out.player_offers])
+
+    # ── the objective decides, not the teammate ──────────────────────────────
+    # Same seat, same finish, same season — the only difference is what the
+    # contract asked for.
+    hit = make_player('Razor Racing', 84.5, contract=2026, objective=10)
+    out = market(hit, 8)
+    rep.check('dat muc tieu -> giu ghe', not out.player_dropped)
+    rep.check('dat muc tieu -> doi cu van moi lai',
+              any(o.team == 'Razor Racing' for o in out.player_offers))
+    rep.check('verdict bao dat', out.player_verdict['met'])
+
+    missed = make_player('Razor Racing', 84.5, contract=2026, objective=5)
+    out = market(missed, 8)
+    rep.check('truot muc tieu nam cuoi -> mat ghe', out.player_dropped)
+    rep.check('truot muc tieu -> doi cu bien mat khoi offer',
+              all(o.team != 'Razor Racing' for o in out.player_offers))
+    rep.check('verdict ghi dung hang va muc tieu',
+              out.player_verdict['position'] == 8
+              and out.player_verdict['objective'] == 5,
+              str(out.player_verdict))
+
+    # Missing it mid-deal is a warning, not a sacking — the tally goes up and
+    # the seat stays. That gap between the two is the point of a longer term.
+    warned = make_player('Razor Racing', 84.5, contract=2028, objective=5)
+    out = market(warned, 8)
+    rep.check('truot giua han -> van giu ghe', not out.player_dropped)
+    rep.check('truot giua han -> misses tang', out.player_verdict['misses'] == 1,
+              str(out.player_verdict['misses']))
+
+    # No target at all (a seat on the worst bike asks only that you finish) can
+    # never be failed.
+    noobj = make_player('Phoenix Motorsport', 62.0, contract=2026, objective=None)
+    out = market(noobj, 24)
+    rep.check('khong co muc tieu thi khong the truot',
+              not out.player_dropped and out.player_verdict['met'])
+
+    # ── signing resets the deal ──────────────────────────────────────────────
+    resign = make_player('Razor Racing', 84.5, contract=2026, objective=5)
+    resign['misses'] = 3
+    sign_player_contract(resign, teams, 'Ducati Factory Racing', 2026, 2)
+    rep.check('ky moi -> misses ve 0', resign['misses'] == 0)
+    rep.check('ky 2 nam -> het han sau 2 mua', resign['contract_until'] == 2028)
+    rep.check('ky moi -> bat dau tu mua sau', resign['contract_from'] == 2027)
+    rep.check('ky moi -> muc tieu theo doi moi va han moi',
+              resign['objective'] == objective_for(teams, 'Ducati Factory Racing',
+                                                   84.5, 2),
+              str(resign['objective']))
 
     # ── the bar rises with the bike ──────────────────────────────────────────
     rep.check('doi xe manh doi hoi cao hon doi xe yeu',
@@ -365,6 +510,115 @@ def player_checks(weights):
     got = {o.team for o in out.player_offers}
     rep.check('ket qua trung binh -> khong duoc moi vao doi dau bang',
               'Ducati Factory Racing' not in got, sorted(got))
+
+    # ── age decides how far down the grid you fall ────────────────────────────
+    young_r = {'age': 24, 'rider_braking': 84.0, 'rider_cornering': 84.0,
+               'aggression': 84.0, 'tyre_management': 84.0, 'consistency': 84.0,
+               'wet_performance': 84.0}
+    old_r = dict(young_r, age=35)
+    rep.check('tre chiu tut it hon gia', drop_tolerance(young_r) < drop_tolerance(old_r),
+              f'{drop_tolerance(young_r):.1f} vs {drop_tolerance(old_r):.1f}')
+    rep.check('ngoai 35 tuoi thi khong con gioi han (> ca dai power luoi 19.6)',
+              drop_tolerance(old_r) >= 19.6, f'{drop_tolerance(old_r):.1f}')
+    # Same ratings, same seat: the near-equivalent move goes to the young rider,
+    # the long fall to the veteran.
+    rep.check('ghe gan tuong duong -> uu tien nguoi tre',
+              salvage_rank(young_r, 2.0) > salvage_rank(old_r, 2.0))
+    rep.check('ghe yeu hon han -> nguoi gia thanh lua chon tot hon',
+              salvage_rank(old_r, 12.0) > salvage_rank(young_r, 12.0),
+              f'{salvage_rank(old_r, 12.0):.1f} vs {salvage_rank(young_r, 12.0):.1f}')
+    rep.check('trong muc chiu duoc thi khong bi phat gi',
+              salvage_rank(young_r, 3.0) == salvage_appeal(young_r))
+
+    # ── renewal bands sit on the right side of the granularity ───────────────
+    # efficiency = expected_rank - position, and expected_rank is always X.5
+    # against a whole-number finish, so efficiency only ever lands on half steps
+    # and NOTHING falls between -0.5 and +0.5. A band edge at 0.0 would therefore
+    # split two adjacent, equally-deserving results — and it did: at-par riders
+    # were losing their seat 21% of the time against 6% for the step above.
+    #
+    # -0.5 means finishing in the second of the team's two expected places, which
+    # is meeting expectations. It has to be treated as such.
+    # Every value efficiency can actually take, either side of the one boundary.
+    # -0.5 is finishing in the second of your team's own two expected places, so
+    # it has to count as meeting expectations; -2.5 is "a little under", which
+    # transfer_flow puts in the same band.
+    for e in (-0.5, -1.5, -2.5, 0.5, 4.0, 12.0):
+        rep.check('dat ky vong (ke ca kem mot chut) -> gan nhu chac chan giu ghe',
+                  renew_probability(e) == RENEW_KEEP, f'eff {e:+.1f}')
+    for e in (-3.5, -6.5, -14.5):
+        rep.check('khong dat ky vong -> gan nhu chac chan mat ghe',
+                  renew_probability(e) == RENEW_FAILED, f'eff {e:+.1f}')
+    rep.check('khong ai chac chan 100% o ca hai dau',
+              0.0 < RENEW_FAILED and RENEW_KEEP < 1.0,
+              f'{RENEW_FAILED} / {RENEW_KEEP}')
+    # A great season does not buy a SAFER seat — it buys a BETTER one, through
+    # promotion and poaching. That is the whole shape of transfer_flow's tiers.
+    rep.check('dua gioi khong lam ghe chac hon, ma mo duong len xe tot hon',
+              renew_probability(12.0) == renew_probability(-0.5))
+
+    # ── contract objectives ──────────────────────────────────────────────────
+    strong, weak = 'Ducati Factory Racing', 'Phoenix Motorsport'
+
+    # The baseline table has to keep roughly agreeing with expected_rank at the
+    # grid's own median rating, because that is the one row where the two ways of
+    # asking "where should this seat finish" describe the same rider. Drift here
+    # means bikes_rating.csv or the CSV grid has moved under the table and every
+    # objective in the game is quietly wrong — regenerate with
+    # tools/contracts/contract_targets.py.
+    #
+    # Only roughly, though: expected_rank hands each team two consecutive places
+    # by power rank, which assumes the twelve bikes are evenly spaced. They are
+    # not. Falcon, Inferno and Triumph sit within 2.8 power of each other, so the
+    # even-spacing model puts Falcon's seats at P19-20 while a median rider really
+    # finishes P16 there. That 3.5 is the widest honest disagreement on the grid,
+    # hence the tolerance — tight enough to catch a real change, loose enough to
+    # live with the crude model the rest of the engine is happy with.
+    gaps = [abs(baseline_finish(teams, str(t), 84.5) - expected_rank(teams, str(t)))
+            for t in teams['team']]
+    worst = max(range(len(gaps)), key=lambda i: gaps[i])
+    rep.check('bang baseline con khop expected_rank o muc 84.5 (lech nhieu nhat)',
+              max(gaps) <= 4.0,
+              f'{list(teams["team"])[worst]}: lech {max(gaps):.1f}')
+    rep.check('bang baseline khop expected_rank tren toan luoi (lech trung binh)',
+              statistics.fmean(gaps) <= 2.5, f'{statistics.fmean(gaps):.2f}')
+
+    rep.check('muc tieu luon trong 1..23 hoac None',
+              all(v is None or 1 <= v <= 23
+                  for t in teams['team'] for r in (62, 78, 84.5, 91, 95)
+                  for v in [objective_for(teams, str(t), r, L) for L in CONTRACT_TERMS]))
+
+    # Longer deal, higher demand — the whole reason term is a choice and not a
+    # freebie. Compared as numbers, with None (no target at all) read as the
+    # easiest possible outcome.
+    def as_num(v):
+        return GRID_SIZE if v is None else v
+    rep.check('han cang dai muc tieu cang kho',
+              all(as_num(objective_for(teams, str(t), r, a))
+                  >= as_num(objective_for(teams, str(t), r, b))
+                  for t in teams['team'] for r in (62, 78, 84.5, 91, 95)
+                  for a, b in zip(CONTRACT_TERMS, CONTRACT_TERMS[1:])))
+    rep.check('chi ky 1 hoac 2 nam', CONTRACT_TERMS == (1, 2), str(CONTRACT_TERMS))
+
+    rep.check('xe cang manh muc tieu cang cao',
+              all(as_num(objective_for(teams, strong, r, 2))
+                  < as_num(objective_for(teams, weak, r, 2))
+                  for r in (62, 78, 84.5, 91)))
+    rep.check('tay dua gioi len thi muc tieu siet lai',
+              as_num(objective_for(teams, weak, 95, 2))
+              < as_num(objective_for(teams, weak, 62, 2)),
+              f'{objective_for(teams, weak, 95, 2)} vs {objective_for(teams, weak, 62, 2)}')
+
+    # A rookie on a bad bike is asked to finish the season, not to score.
+    rep.check('tan binh o doi yeu nhat khong bi dat muc tieu',
+              objective_for(teams, weak, 62, 1) is None,
+              str(objective_for(teams, weak, 62, 1)))
+    # …and the table must not clamp at the AI grid's ceiling, because the player
+    # climbs past it (see the 91-95 rows).
+    rep.check('muc tieu con siet duoc tren 89.5',
+              as_num(objective_for(teams, weak, 95, 2))
+              < as_num(objective_for(teams, weak, 89.5, 2)),
+              f'{objective_for(teams, weak, 95, 2)} vs {objective_for(teams, weak, 89.5, 2)}')
     return rep.done('Nguoi choi')
 
 
@@ -498,17 +752,32 @@ def seat_checks(weights):
 
     # a pool rider young enough to be wanted does come back: hand a team an empty
     # seat and check the call-up can reach the career pool, not just the CSV.
+    #
+    # Everyone else is locked into a contract on purpose. Leave them expiring and
+    # the renewal roll produces free agents, who fill an empty seat at step 5c
+    # long before the call-up at 5d ever runs — so the test would pass or fail on
+    # how many renewals happened to fail, not on whether the pool is reachable.
     riders = fresh(rng=random.Random(3))
+    for r in riders:
+        r['contract_until'] = 2027
     for r in [r for r in riders if r['team'] == 'Inferno Factory']:
         riders.remove(r)
     star_entry = pool_entry(max(base, key=lambda rec: displace_rating(
         {k: (v.item() if hasattr(v, 'item') else v) for k, v in rec.items()})))
     star_entry['name'] = 'POOL RETURNEE'
     star_entry['age'] = 26
-    roster = {'year': 2026, 'riders': riders, 'retired': [], 'pool_used': [],
-              'extra_pool': [star_entry]}
+    # Every CSV name marked used, so the career pool holds the only rider left to
+    # call up. Without that this is a ~1-in-101 lottery — call_up takes whoever
+    # sits NEAREST its target rating, and the CSV pool is dense around the mark a
+    # midfield team aims at, so the entry almost never wins on merit. The old
+    # version passed on volume alone (poaching cascades meant far more draws),
+    # which made it a coin flip dressed up as an invariant. What has to hold is
+    # that extra_pool is wired into the call-up at all.
+    csv_names = list(pd.read_csv(f'{RAW}/riders_pool.csv')['name'])
+    roster = {'year': 2026, 'riders': riders, 'retired': [],
+              'pool_used': csv_names, 'extra_pool': [star_entry]}
     seen = False
-    for seed in range(60):                     # which rookie a team picks is random
+    for seed in range(5):
         out = run_silly_season(roster, standings_for(riders, weights,
                                                      random.Random(seed)),
                                None, 2026, RAW, random.Random(seed))

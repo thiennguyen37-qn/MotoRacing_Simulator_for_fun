@@ -18,8 +18,23 @@ The design and the reasoning behind every constant here live in
   championship places they beat their bike by — the only fair way to compare a
   satellite rider with a factory one, and the thing a factory team is shopping
   for.
-* **Flow is one-way, satellite → factory.** A factory rider who loses their
-  seat leaves the championship rather than dropping down.
+* **Contracts are what open seats, and they are absolute.** A rider still under
+  contract cannot be dropped, poached or promoted — nothing here touches them.
+  When a deal runs out the team almost always goes again (`renew_probability`);
+  the exception is a season that failed to meet expectations at all, which
+  vacates the seat.
+* **A strong season buys a better seat, not a safer one.** Renewal odds are the
+  same for a rider who scraped by and one who dragged a Phoenix into the points.
+  What the second one gets is a route UP: promotion to their factory squad
+  (`PROMOTE_MARGIN`) or a stronger team poaching them (`hire_bar`).
+* **How long a deal runs depends on how you got the seat.** Kept on, promoted or
+  called up as a rookie is two seasons; signing somewhere new after your contract
+  lapsed is one.
+* **Losing a seat is a demotion, not an exit.** A rider nobody renews drops to
+  a weaker team if one will have them (`salvage_appeal`), and how far down turns
+  on their age (`drop_tolerance`) — the young land near where they were, the
+  veterans fall away. Only those nobody wants actually leave the championship,
+  and moves are one-way up the grid otherwise.
 
 The player takes a real seat. The grid is 24 riders in 12 two-seat teams and the
 career rider is one of them, so whichever team they join runs the player plus one
@@ -57,8 +72,24 @@ RETIRE_SKILL_K   = 0.9    # …falling by this much across the rating range
 # would deliver. Across 10 real seasons it ranged -6.9 … +7.6 with a standard
 # deviation of 3.7, so 3.0 is a little under one sigma: a clear difference, not
 # a rounding error.
-DROP_EFFICIENCY  = -3.0   # at or below this (AND beaten by teammate) → seat lost
-PROMOTE_MARGIN   = 3.0    # satellite rider must beat the factory baseline by this
+# The one line that matters: at or below this, the season did not meet
+# expectations and the seat is lost. Above it — including finishing a little
+# worse than the bike deserved — the deal is renewed.
+#
+# It sits at -3.0 rather than 0.0 for a reason worth keeping in mind. expected_rank
+# gives every team two consecutive places (Ducati is worth P1-P2, baseline 1.5)
+# and a finishing position is a whole number, so efficiency only ever lands on
+# half steps: -0.5 means finishing in the second of your team's own two expected
+# places, which is meeting expectations, not missing them. An earlier version put
+# the boundary at 0.0 and split those two adjacent, equally-deserving results into
+# a 6% and a 21% chance of losing the seat.
+DROP_EFFICIENCY  = -3.0
+# Clearly better than the machinery. This is the line for "far exceeded
+# expectations", the band that earns a move UP the grid rather than just a
+# renewal — and it needs no constant of its own, because that band is expressed
+# entirely by the two gates a move already has to pass: PROMOTE_MARGIN for a
+# satellite rider going to their factory squad, and hire_bar for being poached.
+PROMOTE_MARGIN   = 3.0
 
 # Hiring from another team: how far above the baseline a rider must be before a
 # team of this strength will take them. Strong teams can hold out for someone
@@ -76,20 +107,44 @@ SALVAGE_PEAK_AGE = 28     # age past which the years start counting against them
 SALVAGE_AGE_K    = 1.8    # rating points a year beyond that is worth
 SALVAGE_BAR      = 76.0   # what a team needs to see before signing them
 
+# …and how far down the grid they are expected to fall. A rider still in their
+# twenties lands near what they left; a veteran takes whatever is going. The
+# allowance passes the grid's whole power range (19.6) by age 35, which is the
+# same as no limit. See drop_tolerance / salvage_rank.
+SALVAGE_DROP_TOLERANCE = 3.0    # power a rider under SALVAGE_PEAK_AGE gives up
+SALVAGE_DROP_K         = 2.5    # extra power allowed per year past that age
+SALVAGE_DROP_PENALTY   = 3.0    # rating points per power point beyond tolerance
+
 # Rookie call-up: each team aims at a target drawn from a normal distribution
-# whose mean shifts with the bike, then takes the nearest available rookie.
-# SHIFT 1.5 / SIGMA 3.0 gives a bike↔rider correlation of 0.43 — a real tendency
-# without the championship being decided in the off-season (see the calibration
-# table in transfer_market.md).
-ROOKIE_SHIFT     = 1.5
+# whose mean shifts with the bike, then takes the nearest available rookie. The
+# mean for the strongest bike sits SHIFT standard-deviations-of-power above the
+# pool average and the weakest the same below, so a strong team reliably gets the
+# better prospect — while sigma keeps it a tendency and not a draft order.
+ROOKIE_SHIFT     = 2.5
 ROOKIE_SIGMA     = 3.0
 
-# Contracts run 1-2 seasons. `contract_until` is the last season covered, so a
-# rider is out of contract in the Y → Y+1 off-season once contract_until <= Y.
-# This is the brake on churn: only out-of-contract riders can be dropped or
-# poached, which keeps replacements at ~2.4 a season and the 100-strong pool
-# alive for ~40 seasons.
-CONTRACT_LENGTHS = (1, 2)
+# `contract_until` is the last season a deal covers, so a rider is out of
+# contract in the Y → Y+1 off-season once contract_until <= Y. In contract they
+# are untouchable — not droppable, not poachable, not promotable. That is what
+# keeps the market from reshuffling the whole grid every winter, and it is
+# absolute: nothing in this module moves a rider who is still under contract.
+#
+# How long a new deal runs depends entirely on how the rider got there. Staying
+# put, being promoted or arriving as a rookie all buy two seasons; taking a seat
+# at a new team after your contract ran out buys one, so a rider who has just
+# been let go has to prove it again straight away.
+RENEW_YEARS    = 2    # kept on by the team they already ride for
+PROMOTE_YEARS  = 2    # promoted from a satellite to its factory squad
+ROOKIE_YEARS   = 2    # called up from the pool
+MOVE_YEARS     = 1    # out of contract, signing somewhere new
+
+# When a contract runs out the team decides whether to go again, on the same
+# efficiency scale everything else here uses. Two outcomes, not a sliding scale:
+# meet expectations (or miss them only slightly) and you are kept, fail to and
+# you are not. Neither is quite certain — a winter with no surprises at all reads
+# as a spreadsheet rather than a silly season.
+RENEW_KEEP   = 0.95   # eff above DROP_EFFICIENCY
+RENEW_FAILED = 0.10   # eff at or below it
 
 RIDER_STATS = ['rider_braking', 'rider_cornering', 'aggression',
                'tyre_management', 'wet_performance', 'consistency']
@@ -113,13 +168,18 @@ RESERVED_NUMBERS = {1, 2, 3}   # kept free for the player's top-3 reward
 
 @dataclass
 class Offer:
-    """A seat the player could take next season, with the bike that comes with it."""
+    """A seat the player could take next season, with the bike that comes with it,
+    and what the team would ask of them on each length of deal."""
     team: str
     manufacturer: str
     team_status: str
     power: float
     bike: dict                  # the five BIKE_STATS
     current: bool = False       # True for the player's existing team, if it wants them
+    # {term in CONTRACT_TERMS: finishing position demanded, or None for "just
+    # see the season out"}. Worked out here rather than in the UI so the target
+    # the player is shown is the one they will actually be held to.
+    objectives: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -141,6 +201,9 @@ class Outcome:
     extra_pool: list = field(default_factory=list)
     player_offers: list = field(default_factory=list) # [Offer]
     player_dropped: bool = False           # their team declined to keep them
+    # How the player's contract season went — see contract_verdict(). None
+    # outside career mode. The UI narrates it and writes `misses` back.
+    player_verdict: dict | None = None
 
 
 # ── Teams ─────────────────────────────────────────────────────────────────────
@@ -234,6 +297,146 @@ def efficiency(teams: pd.DataFrame, rider: dict, position: int | None) -> float:
     return expected_rank(teams, rider['team']) - float(position)
 
 
+# ── Contract objectives ───────────────────────────────────────────────────────
+# What a team writes into the player's contract: finish this position or better.
+#
+# The target has to account for the RIDER as well as the bike. expected_rank()
+# alone answers "where should this machinery finish", which is the right question
+# for the AI grid — everyone there is rated around 84 — but the wrong one for the
+# player, who spends their first five seasons as the only sub-84 rider on it. A
+# rating-62 rookie finishes P24 on a midfield bike, so a bike-par target is
+# unreachable by construction rather than by riding badly: measured over full
+# careers, that version was met 0% of the time in season two.
+#
+# So the baseline is measured on both axes. Each cell is the median championship
+# finish for a rider of that rating on that team's bike, over 400 synthetic
+# seasons scored with the race engine's own perf_score_race. Rows are
+# BASELINE_RATINGS; columns are the team's power rank, index 0 being the
+# strongest bike. Regenerate with tools/contracts/contract_targets.py — and note
+# that a change to bikes_rating.csv or the 24 CSV riders invalidates the whole
+# table, which is what the 84.5 row check in test_transfers.py guards.
+#
+# A linear fit was tried and rejected: R^2 0.932 sounds fine but it is off by up
+# to 7 places, worst exactly where it matters most (a quick rider on a fast bike,
+# where finishing position is squashed against P1). The fit put a three-year
+# Ducati target at P5 where the measured answer is P2.
+BASELINE_RATINGS = (62.0, 67.0, 73.0, 78.0, 82.0, 84.5, 86.5, 88.0, 89.5,
+                    91.0, 93.0, 95.0)
+BASELINE_FINISH = (
+    (20, 22, 23, 23, 23, 24, 24, 24, 24, 24, 24, 24),   # 62 — a debut season
+    (17, 19, 21, 21, 21, 23, 23, 24, 24, 24, 24, 24),   # 67
+    (11, 15, 16, 17, 17, 20, 20, 22, 23, 24, 24, 24),   # 73
+    (8,  10, 12, 12, 13, 16, 16, 18, 20, 21, 23, 24),   # 78
+    (4,   8,  9,  9, 10, 12, 13, 15, 18, 18, 20, 24),   # 82
+    (2,   6,  7,  7,  8, 11, 11, 13, 16, 16, 19, 22),   # 84.5 — the grid median
+    (1,   4,  6,  6,  7,  9, 10, 11, 14, 15, 16, 21),   # 86.5
+    (1,   3,  4,  5,  5,  9,  9, 10, 13, 13, 16, 20),   # 88
+    (1,   2,  3,  3,  4,  7,  8,  9, 12, 11, 14, 19),   # 89.5 — top of the AI grid
+    # Above the grid's own range, because the player goes there and the AI never
+    # does: XP is earned by finishing position, so a career spent at the front
+    # compounds up to the 95.0 ceiling (five growth stats capped at 99, wet stuck
+    # at 75). Without these rows the table would clamp at 89.5 and a champion's
+    # contract would quietly stop asking anything of them.
+    (1,   2,  3,  3,  3,  6,  6,  8, 11, 11, 13, 18),   # 91
+    (1,   1,  2,  2,  2,  4,  5,  6,  9,  9, 11, 16),   # 93
+    (1,   1,  1,  2,  1,  3,  3,  5,  8,  8,  9, 15),   # 95 — the stat ceiling
+)
+
+# How much worse than par the team will tolerate, by contract length. A longer
+# deal buys the rider a season they cannot be dropped in, so the team asks for
+# more in return: two years is held to par exactly, one year gets two places of
+# grace. Measured pass rates are 97% and 69% — and the point of the whole
+# rating-aware baseline is that those hold steady from a rookie's 62 to a
+# champion's 95 instead of collapsing in the early career.
+#
+# Only one and two years exist, because that is what road racing actually signs.
+# Three was measured too and sat at 69% with two years on 89%, which made the
+# two-year deal nearly free and so not a choice at all; dropping the long option
+# is what forces the remaining two apart to 97/69.
+OBJECTIVE_SLACK = {1: 2.0, 2: 0.0}
+CONTRACT_TERMS  = (1, 2)         # lengths the player can be offered
+GRID_SIZE       = 24
+
+
+def baseline_finish(teams: pd.DataFrame, team: str, rider_rating: float) -> float:
+    """Where a rider of this rating would normally finish on this team's bike.
+
+    Interpolates BASELINE_FINISH on rating; the team picks the column outright,
+    since there are exactly twelve of them. Outside the measured rating range the
+    nearest row is used rather than an extrapolation — both ends are already
+    against a wall (P24 at the bottom, P1 at the top), so running the line on
+    would only invent precision the measurement does not have.
+    """
+    col = int(teams[teams.team == str(team)].iloc[0]['rank'])
+    column = [row[col] for row in BASELINE_FINISH]
+    r = float(rider_rating)
+    if r <= BASELINE_RATINGS[0]:
+        return float(column[0])
+    if r >= BASELINE_RATINGS[-1]:
+        return float(column[-1])
+    for i in range(1, len(BASELINE_RATINGS)):
+        hi = BASELINE_RATINGS[i]
+        if r <= hi:
+            lo = BASELINE_RATINGS[i - 1]
+            frac = (r - lo) / (hi - lo)
+            return column[i - 1] + frac * (column[i] - column[i - 1])
+    return float(column[-1])                      # unreachable; keeps mypy calm
+
+
+def sign_player_contract(player: dict, teams: pd.DataFrame, team: str,
+                         year: int, length: int) -> None:
+    """Write the player's new deal onto their rider record. Mutates in place.
+
+    `year` is the season just finished, so a deal agreed in this off-season
+    starts at year + 1 and a one-year term covers exactly that season. The
+    objective is fixed at signing and does not move afterwards: the player is
+    held to what they agreed to, even if they improve enough during the deal
+    that the same seat would ask more of them today.
+
+    `misses` resets, because it counts misses within one contract.
+    """
+    player['contract_from']  = int(year) + 1
+    player['contract_until'] = int(year) + int(length)
+    player['objective'] = objective_for(teams, team, rating(player), length)
+    player['misses'] = 0
+
+
+def contract_verdict(player: dict, position: int | None, year: int) -> dict:
+    """How the player's contract season went, read off the final standings.
+
+    `objective` is the position their deal asked for, stored on the rider when
+    they signed; None means the deal only asked them to finish the season, which
+    is what a seat on the worst bike on the grid is worth. A rider missing from
+    the standings entirely counts as not having delivered.
+
+    `misses` accumulates across the seasons of one contract and resets when a new
+    one is signed. On a two-year deal the first miss is only a warning — the seat
+    is under contract and cannot be taken — so it exists to be shown to the
+    player, not to drive the drop. Only `final_year and not met` costs the seat.
+    """
+    objective = player.get('objective')
+    met = objective is None or (position is not None and position <= int(objective))
+    return {'objective': objective,
+            'position': position,
+            'met': met,
+            'final_year': out_of_contract(player, year),
+            'misses': int(player.get('misses', 0)) + (0 if met else 1)}
+
+
+def objective_for(teams: pd.DataFrame, team: str, rider_rating: float,
+                  length: int) -> int | None:
+    """The position a contract of this length demands — or None for no target.
+
+    None means the bike is slow enough that "a bit better than par" lands past
+    the back of the grid, so the deal asks only that they finish the season. It
+    is the honest answer for a Phoenix Motorsport seat, and it keeps the UI from
+    printing a target of P26.
+    """
+    target = round(baseline_finish(teams, team, rider_rating)
+                   + OBJECTIVE_SLACK[int(length)])
+    return None if target >= GRID_SIZE else int(target)
+
+
 # ── Off-season steps ──────────────────────────────────────────────────────────
 
 def retire_probability(rider: dict) -> float:
@@ -249,6 +452,22 @@ def retire_probability(rider: dict) -> float:
     return min(1.0, max(0.0, RETIRE_K * (age - RETIRE_MIN_AGE + 1) * relief))
 
 
+def renew_probability(eff: float) -> float:
+    """Chance the rider's own team hands them another RENEW_YEARS seasons.
+
+    Rolled for every seat whose contract has run out, factory and satellite
+    alike, and it turns on one thing: did the season meet expectations. Missing
+    them a little still counts as meeting them — see DROP_EFFICIENCY for why the
+    line is not at zero.
+
+    Deliberately near-certain rather than certain in both directions. The odds
+    exist so a silly season can still surprise, not to model a sliding scale of
+    merit: what a strong season really buys is not a safer seat but a better one,
+    through the promotion and poaching paths.
+    """
+    return RENEW_KEEP if eff > DROP_EFFICIENCY else RENEW_FAILED
+
+
 def salvage_appeal(rider: dict) -> float:
     """How a rider who just lost their seat looks to a team further down.
 
@@ -259,6 +478,47 @@ def salvage_appeal(rider: dict) -> float:
     the wait. Compare against SALVAGE_BAR.
     """
     return rating(rider) - SALVAGE_AGE_K * max(0, int(rider['age']) - SALVAGE_PEAK_AGE)
+
+
+def drop_tolerance(rider: dict) -> float:
+    """How much bike power this rider is expected to give up, losing their seat.
+
+    A rider who still has years ahead of them lands close to where they were —
+    the good teams that are still looking want them, and they have no reason to
+    settle. A veteran has no such pull and takes whatever is left, however far
+    down the grid that is. Past the mid-thirties the allowance exceeds the whole
+    grid's power range (91.8 down to 72.2, so 19.6), which is the same as no
+    limit at all.
+    """
+    return SALVAGE_DROP_TOLERANCE + SALVAGE_DROP_K * max(
+        0, int(rider['age']) - SALVAGE_PEAK_AGE)
+
+
+def salvage_rank(rider: dict, drop: float) -> float:
+    """Which rider a team takes first when several have just lost their seat.
+
+    `drop` is the bike power this particular move would cost them. The vacancy
+    queue runs strongest bike first, so what this ranking really decides is how
+    far down the grid each rider falls.
+
+    Two parts. `salvage_appeal` is how quick they still are, docked for age — the
+    same figure that decides whether they are signable at all. Subtracted from it
+    is whatever the drop exceeds their `drop_tolerance`, which is what separates
+    young from old: a 24-year-old looks poor value to a team four power off what
+    they just left, so the strong teams still looking take them first and the
+    veterans fall through to the bottom.
+
+    It is a preference, never a bar. A weak team with one candidate still signs
+    them — otherwise a young rider with no near-equivalent seat available would
+    be pushed out of the championship altogether, which is the opposite of the
+    intent: it is the veterans who are supposed to run out of options.
+
+    Last season's efficiency is deliberately not part of it, for the same reason
+    it is left out of salvage_appeal: they lost the seat over that season, and
+    counting it twice would leave nobody signable.
+    """
+    over = max(0.0, float(drop) - drop_tolerance(rider))
+    return salvage_appeal(rider) - SALVAGE_DROP_PENALTY * over
 
 
 def displace_rating(rider: dict) -> float:
@@ -330,7 +590,9 @@ def seat_player(riders: list, teams: pd.DataFrame, old_team: str, new_team: str,
     if str(old_team) == str(new_team) or \
             sum(1 for r in riders if str(r['team']) == str(old_team)) >= 2:
         return displaced, None
-    sign(displaced, teams[teams.team == str(old_team)].iloc[0], year, rng)
+    # A swap into the seat the player just vacated, which is a move to a new team
+    # — one year, same as anyone else out of contract signing somewhere new.
+    sign(displaced, teams[teams.team == str(old_team)].iloc[0], year, MOVE_YEARS)
     riders.append(displaced)
     return displaced, str(old_team)
 
@@ -340,9 +602,15 @@ def out_of_contract(rider: dict, year: int) -> bool:
     return int(rider.get('contract_until', year)) <= int(year)
 
 
-def sign(rider: dict, team_row, year: int, rng: random.Random) -> None:
+def sign(rider: dict, team_row, year: int, years: int = MOVE_YEARS) -> None:
     """Put a rider on a team's books for next season: new colours, new bike, new
-    contract. Mutates in place — callers already hold the dict."""
+    contract. Mutates in place — callers already hold the dict.
+
+    `years` is the term, and every caller states it: how a rider arrived is what
+    decides how long they get (see the note by MOVE_YEARS). The default is the
+    one-year deal an out-of-contract rider gets at a new team, which is the
+    commonest route through here.
+    """
     rider['team'] = str(team_row['team'])
     rider['manufacturer'] = str(team_row['manufacturer'])
     rider['team_status'] = str(team_row['team_status'])
@@ -351,7 +619,7 @@ def sign(rider: dict, team_row, year: int, rng: random.Random) -> None:
                   'bike_braking': int(team_row['braking']),
                   'bike_cornering': int(team_row['cornering']),
                   'stability': int(team_row['stability'])})
-    rider['contract_until'] = int(year) + rng.choice(CONTRACT_LENGTHS)
+    rider['contract_until'] = int(year) + int(years)
 
 
 def call_up(pool: pd.DataFrame, used: set, team_row, taken_numbers: set,
@@ -380,7 +648,7 @@ def call_up(pool: pd.DataFrame, used: set, team_row, taken_numbers: set,
         rider[dst] = float(row[src])
     rider['bike_number'] = free_number(taken_numbers, rng)
     taken_numbers.add(rider['bike_number'])
-    sign(rider, team_row, year, rng)
+    sign(rider, team_row, year, ROOKIE_YEARS)
     used.add(rider['name'])
     return rider
 
@@ -446,11 +714,6 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
 
     # Efficiency is measured on the season just finished, before anyone moves.
     eff = {r['name']: efficiency(teams, r, position.get(r['name'])) for r in riders}
-    # Who the player raced alongside LAST season — captured before the market
-    # reshuffles everyone, since that is the comparison their team judges them
-    # on. Reading it afterwards would compare them against next year's lineup.
-    player_mates = ([r['name'] for r in riders
-                     if player and r['team'] == player['team']] if player else [])
 
     # 1 ── everyone gets a year older, including whoever is sitting out in the
     # career's own pool: a rider the player displaced has to be the age they
@@ -476,40 +739,38 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
                   if e['name'] in used
                   or rng.random() >= retire_probability(_grid_shape(e))]
 
-    # 3 ── factory seats lost to underperformance. Three conditions, all needed:
+    # 3 ── renewals. Every seat whose contract has run out gets a roll, factory
+    # and satellite alike, weighted by how the season went (renew_probability).
+    # Lose the roll and the seat is genuinely vacated: they become a free agent
+    # and take their chances further down the grid at step 5c.
     #
-    #   * out of contract — the brake on churn, without which a seventh of the
-    #     grid would turn over every single season and the pool would run dry
-    #     decades early;
-    #   * efficiency at or below the bar — they are not repaying the machinery;
-    #   * beaten by their teammate — the only exactly fair comparison there is,
-    #     same bike, same season. On its own it would force every team to sack
-    #     somebody every year, since one of any two riders always finishes
-    #     behind the other.
+    # This is probabilistic on purpose. transfer_market.md records what a
+    # deterministic "underperform and you are out" rule did when applied to all
+    # 24 seats — 3.0 replacements a season, pool exhausted by season 34. Rolling
+    # for it instead, with a bad season worth a 20% chance rather than a
+    # certainty, lands at ~2.2 and keeps the pool alive past season 45.
     #
-    # Satellite seats are exempt: they already turn over plenty through
-    # promotions and retirements, and adding a second source doubled the
-    # replacement rate to 3.0 a season — enough to exhaust the 100-rider pool
-    # in 34 seasons.
-    squads = {}
-    for r in riders:
-        squads.setdefault(r['team'], []).append(r)
+    # NOTE: winning the roll does NOT stamp the new term here. The contract stays
+    # lapsed for the rest of this off-season, because promotion (5a) and poaching
+    # (5b) both select on out_of_contract() — stamping now empties their
+    # candidate pools and silently kills both paths, with no error and a market
+    # that still appears to run. Step 7 does the stamping. See contracts.md.
     dropped_eff = {}
     keeping = []
     free_agents = []           # lost their seat, still looking for another
     lost_from = {}             # name -> the team that let them go
     lost_age = {}              # name -> age, kept for the departures read-out
     for r in riders:
-        mates = [m for m in squads[r['team']] if m is not r]
-        beaten = any(position.get(m['name'], 99) < position.get(r['name'], 99) for m in mates)
-        if (r['team_status'] == 'factory' and out_of_contract(r, year)
-                and eff[r['name']] <= DROP_EFFICIENCY and beaten):
+        if not out_of_contract(r, year):
+            keeping.append(r)
+            continue
+        if rng.random() < renew_probability(eff[r['name']]):
+            keeping.append(r)
+        else:
             dropped_eff[r['team']] = eff[r['name']]
             lost_from[r['name']] = r['team']
             lost_age[r['name']] = r['age']
             free_agents.append(r)
-        else:
-            keeping.append(r)
     riders = keeping
 
     # 3b ── the player's own market, settled before any seat is filled: whether
@@ -518,8 +779,8 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
     # finished and who the player's team-mates were — so running it here rather
     # than at the end changes no outcome.
     if player:
-        out.player_offers, out.player_dropped = _player_market(
-            teams, player_mates, player, position, year)
+        out.player_offers, out.player_dropped, out.player_verdict = _player_market(
+            teams, player, position, year)
 
     # 4 ── who sits where now, and which seats need filling
     squads = {str(t): [] for t in teams['team']}
@@ -593,7 +854,11 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
         if hire is not None:
             old = hire['team']
             squads[old].remove(hire)
-            sign(hire, row, year, rng)
+            # A promotion is a team backing a rider it already knows, so it comes
+            # with two seasons. Being poached is a new team taking a chance on
+            # someone whose deal just lapsed — one season, prove it again.
+            sign(hire, row, year,
+                 PROMOTE_YEARS if kind == 'promote' else MOVE_YEARS)
             squads[seat['team']].append(hire)
             out.moves.append({'name': hire['name'], 'from': old,
                               'to': seat['team'], 'kind': kind})
@@ -618,9 +883,10 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
                      if float(by_team[lost_from[r['name']]]['power']) > float(row['power'])
                      and salvage_appeal(r) >= SALVAGE_BAR]
             if cands:
-                hire = max(cands, key=lambda r: eff[r['name']])
+                hire = max(cands, key=lambda r: salvage_rank(
+                    r, float(by_team[lost_from[r['name']]]['power']) - float(row['power'])))
                 free_agents.remove(hire)
-                sign(hire, row, year, rng)
+                sign(hire, row, year, MOVE_YEARS)
                 squads[seat['team']].append(hire)
                 out.moves.append({'name': hire['name'], 'from': lost_from[hire['name']],
                                   'to': seat['team'], 'kind': 'demoted'})
@@ -644,12 +910,15 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
         if name in still_free:
             out.left.append(entry)
 
-    # 7 ── renew whoever is left, so nobody carries a lapsed contract into the
-    # new season and becomes droppable again immediately.
+    # 7 ── stamp the renewals agreed back at step 3. Anyone still carrying a
+    # lapsed contract kept their seat there and was not poached away since, so
+    # this is where their new term actually goes on the books. Doing it here
+    # rather than at step 3 is what leaves them visible to promotion and poaching
+    # in between — see the note at step 3.
     riders = [r for squad in squads.values() for r in squad]
     for r in riders:
         if out_of_contract(r, year):
-            r['contract_until'] = year + rng.choice(CONTRACT_LENGTHS)
+            r['contract_until'] = year + RENEW_YEARS
 
     out.riders = riders
     out.pool_used = sorted(used)
@@ -657,23 +926,45 @@ def run_silly_season(roster: dict, standings: list, player: dict | None,
     return out
 
 
-def _player_market(teams, mates, player, position, year):
+def _one_offer(teams, team: str, player: dict) -> Offer:
+    name = str(team)
+    row = teams[teams.team == name].iloc[0]
+    return Offer(team=name, manufacturer=str(row['manufacturer']),
+                 team_status=str(row['team_status']),
+                 power=round(float(row['power']), 1),
+                 bike=bike_for(teams, name),
+                 current=name == player['team'],
+                 objectives={L: objective_for(teams, name, rating(player), L)
+                             for L in CONTRACT_TERMS})
+
+
+def _player_market(teams, player, position, year):
     """Which teams want the career rider, and did their current one keep them.
 
-    Being dropped uses the same test as the AI (out of contract, efficiency at
-    or below the bar, beaten by a teammate) — but unlike an AI factory rider,
-    the player is never forced out of the championship: a satellite seat is
-    always preferable to ending the career against their will, so the one-way
-    flow rule is deliberately not applied to them.
+    Unlike an AI rider the player is judged on the objective written into their
+    contract rather than on a renewal roll: they agreed to a position, so they
+    are held to it and nothing else. Missing it in the deal's final year costs
+    the seat. Missing it earlier does not — the contract is still running, and
+    that protection is the whole reason a longer term is worth considering.
+
+    They are never forced out of the championship, though. A satellite seat beats
+    ending a career against the player's will, so the one-way flow rule that
+    applies to the AI is deliberately not applied here.
 
     Offers are not limited to teams with a seat going. A team that rates the
     player will drop the weaker of its two riders to sign them (drop_for_player);
     what it will not do is take them at any price, which is what hire_bar is for.
     """
+    verdict = contract_verdict(player, position.get(player['name']), year)
+
+    # Still under contract: the seat is theirs, and nobody else can talk to them.
+    # This is what the player actually buys with a two-year deal, and the cost of
+    # it — a better bike coming free this winter is simply not on the table.
+    if not verdict['final_year']:
+        return [_one_offer(teams, player['team'], player)], False, verdict
+
     p_eff = efficiency(teams, player, position.get(player['name']))
-    mine = position.get(player['name'], 99)
-    beaten = any(position.get(m, 99) < mine for m in mates if m != player['name'])
-    dropped = (out_of_contract(player, year) and p_eff <= DROP_EFFICIENCY and beaten)
+    dropped = not verdict['met']
 
     offers = []
     for _, t in teams.iterrows():
@@ -683,21 +974,13 @@ def _player_market(teams, mates, player, position, year):
             continue                       # they just let the player go
         if not is_current and p_eff < hire_bar(teams, name):
             continue                       # not good enough for this team
-        offers.append(Offer(team=name, manufacturer=str(t['manufacturer']),
-                            team_status=str(t['team_status']),
-                            power=round(float(t['power']), 1),
-                            bike=bike_for(teams, name), current=is_current))
+        offers.append(_one_offer(teams, name, player))
     # Nobody wants them. Rather than ending the career — the game has no flow
     # for that, and one bad season shouldn't be terminal — the bottom team is
     # always willing. Landing on the worst bike on the grid is punishment
     # enough, and it leaves the player somewhere to climb back from.
     if not offers:
-        t = teams.iloc[-1]
-        offers.append(Offer(team=str(t['team']), manufacturer=str(t['manufacturer']),
-                            team_status=str(t['team_status']),
-                            power=round(float(t['power']), 1),
-                            bike=bike_for(teams, str(t['team'])),
-                            current=str(t['team']) == player['team']))
+        offers.append(_one_offer(teams, str(teams.iloc[-1]['team']), player))
 
     offers.sort(key=lambda o: -o.power)
-    return offers, dropped
+    return offers, dropped, verdict

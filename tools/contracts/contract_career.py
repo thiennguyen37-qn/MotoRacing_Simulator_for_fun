@@ -23,7 +23,7 @@ import numpy as np
 sys.path.insert(0, '.')
 from src.engine import circuit_weights, perf_score_race
 from src.loader import load_circuits, load_riders
-from src.progression import GROWTH_STATS, apply_growth, xp_for_race
+from src.progression import GROWTH_STATS, STAT_CAP, xp_for_race
 from src.transfers import (RIDER_STATS, bike_for, expected_rank, hire_bar,
                            pool_entry, run_silly_season, seat_player, team_table)
 
@@ -113,8 +113,14 @@ def run_one(seed, weights, teams):
                     'power': float(teams[teams.team == player['team']].iloc[0]['power'])})
 
         # Growth: the real XP curve, using the season position for every race.
+        # The game banks XP into a pool the player spends by hand, which this
+        # tool can't predict, so it assumes the neutral allocation — split
+        # evenly across the five growth stats. Rating is a mean, so how the
+        # player actually splits it barely moves what the market sees.
         for _ in range(ROUNDS * RACES):
-            apply_growth(player, xp_for_race(pos, s + 1))
+            per_stat = xp_for_race(pos, s + 1) / len(GROWTH_STATS)
+            for stat in GROWTH_STATS:
+                player[stat] = min(player[stat] + per_stat, STAT_CAP)
 
         # A missed target in the contract's final year means the team does not
         # keep them — modelled by letting the contract lapse, which is what the

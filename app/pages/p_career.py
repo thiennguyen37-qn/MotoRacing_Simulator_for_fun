@@ -12,6 +12,7 @@ from app.pages.p_season_hub import _big_bike_pixmap
 from app.wizard import RAW, CAREER_SLOTS
 from src.loader import load_bikes
 from src.transfers import objective_for, rating, team_table
+from src import progression
 
 # Every UN member state (+ a few common non-member entries), text only — no
 # flag assets exist for most of these, so the Nationality row is text-only.
@@ -1119,6 +1120,9 @@ class CareerPage(QWizardPage):
             'top_speed': int(bike['top_speed']), 'acceleration': int(bike['acceleration']),
             'bike_braking': int(bike['bike_braking']), 'bike_cornering': int(bike['bike_cornering']),
             'stability': int(bike['stability']),
+            # Banked, unspent race XP — see src/progression.py. Written out at
+            # zero rather than left absent so a save says what it holds.
+            progression.DRY_POOL: 0.0, progression.WET_POOL: 0.0,
         }
 
         wiz.reset_career_progress()

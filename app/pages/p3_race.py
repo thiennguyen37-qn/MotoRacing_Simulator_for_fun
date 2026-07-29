@@ -1,10 +1,8 @@
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout,
                               QPushButton, QLabel, QTableWidgetItem, QTabWidget,
                               QDialog, QFrame, QApplication, QWidget)
-from PyQt6.QtGui import (QFont, QColor, QBrush, QPen, QPainter, QPainterPath,
-                          QLinearGradient)
-from PyQt6.QtCore import (Qt, QTimer, QVariantAnimation, QEasingCurve,
-                           QRect, QRectF, QPropertyAnimation, pyqtProperty)
+from PyQt6.QtGui import QFont, QColor, QBrush
+from PyQt6.QtCore import Qt, QTimer, QVariantAnimation, QEasingCurve
 
 from src.simulator import run_race
 from src.engine import fmt_lap
@@ -12,7 +10,6 @@ from src import progression
 from PyQt6.QtWidgets import QHeaderView
 from app.widgets.table_utils import (make_table, TEAM_COLOR, MANU_COLOR, _DEFAULT_COLOR,
                                       row_bg, _is_time, SESSION_BTN_SS, SESSION_TABS_SS)
-from app.pages.p_gallery import STATS
 
 HEADERS = ['P', '#', 'RIDER', 'TEAM', 'MANUFACTURER', 'RACE TIME', 'GAP']
 
@@ -114,99 +111,26 @@ def _fill(table, result_df, meta):
 
 
 # ── Post-race progression panel (career only) ─────────────────────────────────
-# Bigger, animated cousin of season_hub's _RatingBar: fills from the stat's
-# pre-race value up to its post-race value once shown, rather than sitting at
-# a fixed value.
-
-class _GrowthBar(QWidget):
-    def __init__(self, label: str, color_hex: str, old_value: float, new_value: float):
-        super().__init__()
-        self._label = label
-        self._color = QColor(color_hex)
-        self._old   = old_value
-        self._new   = new_value
-        self._fill  = old_value / 100.0
-        self._anim  = None
-        self.setFixedHeight(38)
-        self.setAutoFillBackground(False)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-
-    def _get_fill(self):
-        return self._fill
-
-    def _set_fill(self, v):
-        self._fill = v
-        self.update()
-
-    fill = pyqtProperty(float, _get_fill, _set_fill)
-
-    def animate(self, duration=900, delay=0):
-        anim = QPropertyAnimation(self, b'fill', self)
-        anim.setStartValue(self._old / 100.0)
-        anim.setEndValue(self._new / 100.0)
-        anim.setDuration(duration)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._anim = anim   # keep a reference alive for the animation's duration
-        QTimer.singleShot(delay, anim.start)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        label_w, val_w = 200, 100
-        bar_x = label_w
-        bar_w = w - label_w - val_w - 12
-
-        p.setFont(QFont('Segoe UI', 13))
-        p.setPen(QColor('#ffffff'))
-        p.drawText(QRect(0, 0, label_w, h),
-                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                   self._label)
-
-        tr = QRectF(bar_x, h / 2 - 7, bar_w, 14)
-        tp = QPainterPath(); tp.addRoundedRect(tr, 7, 7)
-        p.fillPath(tp, QColor(22, 22, 38, 200))
-
-        fw = max(14.0, bar_w * self._fill)
-        fr = QRectF(bar_x, h / 2 - 7, fw, 14)
-        fp = QPainterPath(); fp.addRoundedRect(fr, 7, 7)
-        g = QLinearGradient(bar_x, 0, bar_x + fw, 0)
-        g.setColorAt(0, self._color.darker(145))
-        g.setColorAt(1, self._color)
-        p.fillPath(fp, g)
-
-        p.setFont(QFont('Segoe UI', 13, QFont.Weight.Bold))
-        p.setPen(QColor('#ffffff'))
-        p.drawText(QRect(w - val_w, 0, val_w - 54, h),
-                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-                   f'{self._new:.2f}')
-
-        delta = self._new - self._old
-        p.setFont(QFont('Segoe UI', 11, QFont.Weight.Bold))
-        p.setPen(QColor('#5eff7e'))
-        p.drawText(QRect(w - 54, 0, 54, h),
-                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-                   f'+{delta:.2f}')
-
 
 class ProgressionPanel(QDialog):
-    """Career only: shown right after a race's results reveal, animating each
-    growth stat's bar from its pre-race value up to its post-race value."""
+    """Career only: shown right after a race's results reveal — three centred
+    white lines and nothing else: what it is, where the custom rider finished,
+    and what the race banked.
 
-    _META = {name: (label, color) for name, label, color in STATS}
+    Nothing is applied to a stat here: the XP lands in one of the two pools
+    (dry / wet, see src/progression.py) and the player spends it by hand in
+    Your Profile -> Rating. The wet race's XP is still labelled as such, since
+    it buys wet craft alone — but the pool balances themselves live on the
+    Rating page rather than being re-stated here."""
 
-    def __init__(self, parent, race_num, position, xp, growth: dict, is_wet=False):
+    def __init__(self, parent, position, xp, is_wet=False):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # A wet race adds a sixth bar (wet_performance), so size to the bar count.
-        bar_order = [s for s in progression.GROWTH_STATS if s in growth]
-        if 'wet_performance' in growth:
-            bar_order.append('wet_performance')
-        height = 180 + len(bar_order) * 48
-        self.setFixedSize(560, height)
+        width, height = 400, 190
+        self.setFixedSize(width, height)
         geo = QApplication.primaryScreen().availableGeometry()
-        self.move(geo.center().x() - 280, geo.center().y() - height // 2)
+        self.move(geo.center().x() - width // 2, geo.center().y() - height // 2)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -217,43 +141,30 @@ class ProgressionPanel(QDialog):
             'QLabel { background: transparent; border: none; color: #ffffff; }'
         )
         cl = QVBoxLayout(card)
-        cl.setContentsMargins(32, 26, 32, 22)
-        cl.setSpacing(10)
+        cl.setContentsMargins(32, 26, 32, 26)
+        cl.setSpacing(6)
+        cl.addStretch(1)
 
-        pos_text = 'DNF' if position is None else f'P{position}'
-        weather = '  ·  WET 🌧' if is_wet else ''
-        title = QLabel(f'RACE {race_num} RESULT  ·  {pos_text}{weather}')
-        title.setFont(QFont('Segoe UI', 16, QFont.Weight.Bold))
-        title.setStyleSheet('letter-spacing: 1px;')
-        cl.addWidget(title)
-
-        xp_lbl = QLabel(f'+{xp:.2f} XP earned')
-        xp_lbl.setFont(QFont('Segoe UI', 11))
-        xp_lbl.setStyleSheet('color: #9b9bac;')
-        cl.addWidget(xp_lbl)
-        cl.addSpacing(14)
-
-        self._bars = []
-        for stat in bar_order:
-            label, color = self._META[stat]
-            old, new, _delta = growth[stat]
-            bar = _GrowthBar(label, color, old, new)
-            self._bars.append(bar)
-            cl.addWidget(bar)
+        banked = 'WET XP' if is_wet else 'XP'
+        rows = (('RACE RESULT', 14, QFont.Weight.Bold,   'letter-spacing: 2px;'),
+                ('DNF' if position is None else f'P{position}',
+                                38, QFont.Weight.Bold,   ''),
+                (f'+{xp:.2f} {banked}',
+                                13, QFont.Weight.Normal, ''))
+        for text, size, weight, extra in rows:
+            lbl = QLabel(text)
+            lbl.setFont(QFont('Segoe UI', size, weight))
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            # White is restated per label rather than left to the card's
+            # QLabel rule: a widget's own stylesheet takes priority over the
+            # ancestor's, and a rule that named only letter-spacing was enough
+            # to lose the colour with it.
+            lbl.setStyleSheet('background: transparent; border: none;'
+                              ' color: #ffffff;' + extra)
+            cl.addWidget(lbl)
 
         cl.addStretch(1)
-        hint = QLabel('Press Enter to continue')
-        hint.setFont(QFont('Segoe UI', 9))
-        hint.setStyleSheet('color: #666677;')
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(hint)
-
         root.addWidget(card)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        for i, bar in enumerate(self._bars):
-            bar.animate(delay=i * 90)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape):
@@ -573,12 +484,13 @@ class RacePage(QWizardPage):
                 self._career_session_done = True
             self.completeChanged.emit()
         if career:
-            self._show_progression(race_num, result_df, meta)
+            self._show_progression(result_df, meta)
 
-    def _show_progression(self, race_num, result_df, meta):
-        """Career only: award this race's XP to the custom rider and show the
-        stat-growth panel — see src/progression.py for the formula. A wet race
-        additionally boosts wet_performance."""
+    def _show_progression(self, result_df, meta):
+        """Career only: bank this race's XP for the custom rider and show the
+        result panel — see src/progression.py for the formula. Stats are not
+        touched here: the player spends the pool by hand in Your Profile →
+        Rating, and a wet race banks into the wet pool alone."""
         wiz = self._wiz
         rider = wiz.load_career_rider()
         if not rider:
@@ -588,14 +500,10 @@ class RacePage(QWizardPage):
             return
         row = row.iloc[0]
         position = None if bool(row['dnf']) else int(row['pos'])
-        year = wiz.years_racing()
-        xp = progression.xp_for_race(position, year)
-        wet_bonus = progression.wet_perf_bonus(position, year) if meta['is_wet'] else 0.0
-        growth = progression.apply_growth(rider, xp, wet_bonus)
+        xp = progression.xp_for_race(position, wiz.years_racing())
+        progression.bank_xp(rider, xp, meta['is_wet'])
         wiz.save_career_rider(rider)
-        for stat in growth:
-            wiz.df.loc[wiz.df['name'] == rider['name'], stat] = rider[stat]
-        ProgressionPanel(self, race_num, position, xp, growth, meta['is_wet']).exec()
+        ProgressionPanel(self, position, xp, meta['is_wet']).exec()
 
     def isComplete(self):
         return self._both_done

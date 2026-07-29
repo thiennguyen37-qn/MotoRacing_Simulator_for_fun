@@ -33,8 +33,8 @@ SEASONS = 25
 SEEDS = 60
 ROUNDS, RACES = 13, 2
 
-CUSTOM_START = {'rider_braking': 60.0, 'rider_cornering': 60.0, 'aggression': 60.0,
-                'tyre_management': 60.0, 'consistency': 60.0, 'wet_performance': 75.0}
+CUSTOM_START = {'rider_braking': 65.0, 'rider_cornering': 65.0, 'aggression': 65.0,
+                'tyre_management': 65.0, 'consistency': 65.0, 'wet_performance': 80.0}
 
 # Slack over expected_rank by contract length: a longer deal buys security, so
 # the team asks for more in return. 1 year is the lenient, exposed option.

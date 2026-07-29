@@ -21,9 +21,9 @@ GROWTH_STATS    = ['rider_braking', 'rider_cornering', 'aggression',
 STAT_CAP        = 99.0
 
 CUSTOM_START = {
-    'rider_braking': 60.0, 'rider_cornering': 60.0, 'aggression': 60.0,
-    'tyre_management': 60.0, 'consistency': 60.0,
-    'wet_performance': 75.0,            # excluded from growth, kept fixed
+    'rider_braking': 65.0, 'rider_cornering': 65.0, 'aggression': 65.0,
+    'tyre_management': 65.0, 'consistency': 65.0,
+    'wet_performance': 80.0,            # excluded from growth, kept fixed
     'top_speed': 83.0, 'acceleration': 83.0,
     'bike_braking': 68.0, 'bike_cornering': 81.0, 'stability': 78.0,
 }

@@ -174,10 +174,12 @@ class MotoWizard(QWizard):
         self._built = False
         self._windowed = False   # True once dropped out of borderless-fullscreen
         # A page can set this before returning from handle_key() to mean "I
-        # consumed an arrow key, but as a content scroll, not a menu-focus
-        # move" — the 'navigate' click is meant for the latter (see
-        # eventFilter below); this flag makes that one exception without
-        # changing the True/False handle_key() contract every page relies on.
+        # consumed this key, but it doesn't deserve the sound that goes with
+        # it" — a content scroll rather than a menu-focus move ('navigate'), or
+        # a key the page swallowed on purpose and did nothing with, where the
+        # 'back' click would claim a move that never happened (Your Profile
+        # and Backspace). It makes that exception without changing the
+        # True/False handle_key() contract every page relies on.
         self.suppress_next_sfx = False
 
     # ── Page build (drives the loading bar) ────────────────────────────────────
@@ -463,12 +465,11 @@ class MotoWizard(QWizard):
                 return True
 
             if hasattr(page, 'handle_key') and page.handle_key(k):
-                if k in (Qt.Key.Key_Up, Qt.Key.Key_Down,
+                if self.suppress_next_sfx:
+                    self.suppress_next_sfx = False
+                elif k in (Qt.Key.Key_Up, Qt.Key.Key_Down,
                          Qt.Key.Key_Left, Qt.Key.Key_Right):
-                    if self.suppress_next_sfx:
-                        self.suppress_next_sfx = False
-                    else:
-                        self._audio.play_sfx('navigate')
+                    self._audio.play_sfx('navigate')
                 elif k in (Qt.Key.Key_Return, Qt.Key.Key_Enter,
                             Qt.Key.Key_Space):
                     self._audio.play_sfx('select')

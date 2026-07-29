@@ -6,7 +6,7 @@ import numpy as np
 from PyQt6.QtWidgets import (QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout,
                               QWidget, QLabel, QStackedWidget, QFrame, QDialog,
                               QSizePolicy, QSpacerItem, QGraphicsOpacityEffect,
-                              QHeaderView)
+                              QHeaderView, QApplication)
 from PyQt6.QtGui import (QFont, QFontMetrics, QPainter, QColor, QPixmap, QPainterPath,
                           QLinearGradient, QPen, QImage)
 from PyQt6.QtCore import (Qt, QTimer, QUrl, QRect, QRectF, QPointF, QPoint, QSize,
@@ -26,6 +26,7 @@ from app.widgets.world_map import WorldMapWidget
 from app.wizard import SESSION_NAMES, SESSION_DAY
 from src.simulator import POINTS, WET_RACE_PROB_PCT
 from src.engine import fmt_lap, perf_score_race, circuit_weights, norm
+from src import progression
 
 
 def _alpha_bbox(pix: QPixmap):
@@ -764,15 +765,31 @@ class _ResultsView(QWidget):
 # have their label/value colours baked into paintEvent, not parameterised.
 
 class _RatingBar(QWidget):
+    """One ability bar. Also the spending row: the focused bar carries a caret,
+    and its fill and number are repainted in place as Left/Right move the stat
+    — no rebuild, since a held arrow key repeats at the OS repeat rate."""
+
     def __init__(self, label: str, value: float, color_hex: str):
         super().__init__()
-        self._label = label
-        self._value = value
-        self._color = QColor(color_hex)
-        self._fill  = value / 100.0
+        self._label   = label
+        self._value   = value
+        self._color   = QColor(color_hex)
+        self._fill    = value / 100.0
+        self._focused = False
         self.setFixedHeight(38)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+
+    def set_focused(self, on: bool):
+        if on != self._focused:
+            self._focused = on
+            self.update()
+
+    def set_value(self, value: float):
+        if value != self._value:
+            self._value = value
+            self._fill  = value / 100.0
+            self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -782,11 +799,16 @@ class _RatingBar(QWidget):
         bar_x = label_w
         bar_w = w - label_w - val_w - 12
 
-        p.setFont(QFont('Segoe UI', 15))
+        if self._focused:
+            hp = QPainterPath()
+            hp.addRoundedRect(QRectF(-8, 1, w + 16, h - 2), 6, 6)
+            p.fillPath(hp, QColor(255, 255, 255, 20))
+
+        p.setFont(QFont('Segoe UI', 15, QFont.Weight.Bold if self._focused else QFont.Weight.Normal))
         p.setPen(QColor('#ffffff'))
         p.drawText(QRect(0, 0, label_w, h),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                   self._label)
+                   ('▸ ' if self._focused else '') + self._label)
 
         tr = QRectF(bar_x, h / 2 - 7, bar_w, 14)
         tp = QPainterPath(); tp.addRoundedRect(tr, 7, 7)
@@ -815,6 +837,12 @@ class _RatingPowerBar(QWidget):
         self.setFixedHeight(52)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+
+    def set_score(self, score: float):
+        if score != self._score:
+            self._score = score
+            self._fill  = score / 100.0
+            self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -851,9 +879,42 @@ class _RatingPowerBar(QWidget):
 
 
 class _RatingView(QWidget):
+    """The ability bars, and the counter where banked XP is spent.
+
+    Up/Down picks a stat; Right buys one XP_STEP of it straight out of the pool
+    behind that stat — the bar, the pool counter and the power rating all move
+    on the press, no amount to type and nothing to confirm (see
+    src/progression.py: the five growth stats draw on the dry pool, Wet
+    Performance on the wet one). Shift+Right goes ten steps at a time and a
+    held key repeats, so a big spend doesn't mean a hundred presses. Left hands
+    a step back for a misfire, limited to what was bought in this visit
+    (`_spent`) — the pool is not a place to cash in the rating a rider already
+    had.
+
+    Every change writes through `commit` — without that a spend would vanish on
+    the next reload — but debounced through `_save_timer` rather than on each
+    press, since key-repeat would otherwise rewrite rider.json thirty times a
+    second. `flush` forces the pending write out; the profile screen calls it
+    on the way out of the view."""
+
+    FAST_STEPS  = 10     # Shift+Left/Right
+    SAVE_DELAY  = 400    # ms of quiet before a spend is written to disk
+
     def __init__(self):
         super().__init__()
         self.setStyleSheet('background: transparent;')
+        self._rider   = {}
+        self._commit  = None
+        self._focus   = 0
+        self._flash   = ''
+        self._bars    = []
+        self._power   = None
+        self._spent   = {}       # stat -> steps bought since load(), what Left may undo
+        self._dirty   = False
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(self.SAVE_DELAY)
+        self._save_timer.timeout.connect(self.flush)
         lay = QVBoxLayout(self)
         # Sized to fit without scrolling — same constraint as _BasicInfoView
         # (see the note there). The bars+power block centres vertically in
@@ -866,7 +927,14 @@ class _RatingView(QWidget):
         title.setFont(QFont('Segoe UI', 27, QFont.Weight.Bold))
         title.setStyleSheet('color:#ffffff; letter-spacing:2px; background:transparent; border:none;')
         lay.addWidget(title)
-        lay.addSpacing(22)
+        lay.addSpacing(10)
+
+        self._pools = QLabel('')
+        self._pools.setFont(QFont('Segoe UI', 13))
+        self._pools.setTextFormat(Qt.TextFormat.RichText)
+        self._pools.setStyleSheet('background:transparent; border:none;')
+        lay.addWidget(self._pools)
+        lay.addSpacing(12)
 
         lay.addStretch(1)
 
@@ -883,16 +951,45 @@ class _RatingView(QWidget):
         self._power_lay = QVBoxLayout(self._power_holder)
         self._power_lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._power_holder)
+        lay.addSpacing(14)
+
+        self._hint = QLabel('')
+        self._hint.setFont(QFont('Segoe UI', 11))
+        self._hint.setTextFormat(Qt.TextFormat.RichText)
+        self._hint.setStyleSheet('background:transparent; border:none;')
+        lay.addWidget(self._hint)
         lay.addStretch(1)
 
+    def set_commit(self, fn):
+        """fn(rider) — persist a spend. Set once by the hub page, which owns
+        the wizard; this view is built without it."""
+        self._commit = fn
+
+    def reset(self):
+        """Back to the first stat with a clean receipt line — same 'no stale
+        state' rule the rest of the sub-hub follows when a view is reopened.
+        Also closes the undo window: a new visit can't take back the previous
+        one's spends."""
+        self.flush()
+        self._focus = 0
+        self._flash = ''
+        self._spent = {}
+        self._refresh()
+
     def load(self, rider: dict):
+        self._rider = rider if isinstance(rider, dict) else {}
+        self._flash = ''
         while self._bars_lay.count():
             item = self._bars_lay.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.setParent(None)
+        self._bars = []
         for col_name, label, color in STATS:
-            self._bars_lay.addWidget(_RatingBar(label, float(rider.get(col_name, 0)), color))
+            bar = _RatingBar(label, float(self._rider.get(col_name, 0)), color)
+            self._bars.append(bar)
+            self._bars_lay.addWidget(bar)
+        self._focus = min(self._focus, max(len(self._bars) - 1, 0))
 
         while self._power_lay.count():
             item = self._power_lay.takeAt(0)
@@ -900,7 +997,138 @@ class _RatingView(QWidget):
             if w is not None:
                 w.setParent(None)
         score = sum(float(rider.get(c, 0)) for c, _, _ in STATS) / len(STATS) if rider else 0.0
-        self._power_lay.addWidget(_RatingPowerBar(score))
+        self._power = _RatingPowerBar(score)
+        self._power_lay.addWidget(self._power)
+
+        self._refresh()
+
+    # ── Spending ─────────────────────────────────────────────────────────────
+
+    def _stat(self) -> str:
+        return STATS[self._focus][0]
+
+    def _sync_bars(self):
+        """Push the rider's current numbers onto the widgets in place. Called
+        after every spend instead of load(): rebuilding six bars per press
+        under key-repeat is both wasteful and visibly flickery."""
+        for i, (col_name, _label, _color) in enumerate(STATS):
+            if i < len(self._bars):
+                self._bars[i].set_value(float(self._rider.get(col_name, 0)))
+        if self._power is not None:
+            self._power.set_score(
+                sum(float(self._rider.get(c, 0)) for c, _, _ in STATS) / len(STATS))
+
+    def _refresh(self):
+        """Repaint the pool header, the focus on the bars, and the prompt line.
+        Every key that changes state ends here."""
+        r = self._rider
+        dry = progression.pool(r, progression.DRY_POOL)
+        wet = progression.pool(r, progression.WET_POOL)
+        self._pools.setText(
+            f"<span style='color:#5eff7e;'><b>XP {dry:.2f}</b></span>"
+            f"<span style='color:#666677;'> ({int(round(dry / progression.XP_STEP)):,} pts)</span>"
+            f"<span style='color:#3a3a4a;'>&nbsp;&nbsp;·&nbsp;&nbsp;</span>"
+            f"<span style='color:#4fc3f7;'><b>WET XP {wet:.2f}</b></span>"
+            f"<span style='color:#666677;'> ({int(round(wet / progression.XP_STEP)):,} pts)</span>")
+
+        for i, bar in enumerate(self._bars):
+            bar.set_focused(i == self._focus)
+
+        if not self._bars:
+            self._hint.setText('')
+            return
+        if self._flash:
+            self._hint.setText(self._flash)
+            return
+        limit = progression.max_steps(r, self._stat())
+        self._hint.setText(
+            f"<span style='color:#666677;'>"
+            f"<b>→</b> spends on <b>{STATS[self._focus][1]}</b> "
+            f"(Shift +{self.FAST_STEPS * progression.XP_STEP:.2f})"
+            f"&nbsp;&nbsp;·&nbsp;&nbsp;<b>←</b> takes one back"
+            f"&nbsp;&nbsp;·&nbsp;&nbsp;1 pt = +{progression.XP_STEP:.2f}, "
+            f"{limit:,} available</span>")
+
+    def _steps_for(self, fast: bool) -> int:
+        return self.FAST_STEPS if fast else 1
+
+    def _spend(self, steps: int):
+        """Buy up to `steps` of the focused stat, charging the pool as it goes.
+        Short of the ask rather than nothing at all when the pool (or the 99.00
+        cap) can't cover the full amount — Shift on the last few points should
+        still spend those points."""
+        stat  = self._stat()
+        steps = min(steps, progression.max_steps(self._rider, stat))
+        if steps <= 0:
+            self._flash = ("<span style='color:#ff6b6b;'>Nothing left to spend here — "
+                           "the pool is empty, or the stat is at 99.00.</span>")
+            self._refresh()
+            return
+        _old, new, cost = progression.spend_xp(self._rider, stat, steps)
+        self._spent[stat] = self._spent.get(stat, 0) + steps
+        self._flash = (f"<span style='color:#5eff7e;'>{STATS[self._focus][1]} → "
+                       f"<b>{new:.2f}</b>&nbsp;&nbsp;·&nbsp;&nbsp;−{cost:.2f} XP</span>")
+        self._after_change()
+
+    def _refund(self, steps: int):
+        """Hand back up to `steps` of what THIS visit bought on the focused
+        stat (see `_spent`) — a misfire on the arrow key shouldn't cost a
+        career's XP, but nor should Left turn a rider's existing rating into
+        spendable points."""
+        stat  = self._stat()
+        steps = min(steps, self._spent.get(stat, 0))
+        if steps <= 0:
+            self._flash = ("<span style='color:#ff6b6b;'>Nothing to take back — "
+                           "← only undoes what you've spent since opening this page.</span>")
+            self._refresh()
+            return
+        _old, new, back = progression.refund_xp(self._rider, stat, steps)
+        self._spent[stat] -= steps
+        self._flash = (f"<span style='color:#9b9bac;'>{STATS[self._focus][1]} → "
+                       f"<b>{new:.2f}</b>&nbsp;&nbsp;·&nbsp;&nbsp;+{back:.2f} XP back</span>")
+        self._after_change()
+
+    def _after_change(self):
+        self._sync_bars()
+        self._dirty = True
+        self._save_timer.start()      # restarts the countdown on every press
+        self._refresh()
+
+    def flush(self):
+        """Write a pending spend out now. Safe to call when there's nothing
+        outstanding, which is how the profile screen can call it on every exit
+        without caring whether anything was spent."""
+        self._save_timer.stop()
+        if self._dirty and self._commit is not None:
+            self._commit(self._rider)
+        self._dirty = False
+
+    def handle_key(self, key: int) -> bool:
+        """True when the key was consumed here. Escape is left alone so it
+        still closes the view."""
+        K = Qt.Key
+        if not self._bars:
+            return False
+
+        if key in (K.Key_Up, K.Key_Down):
+            self._focus = (self._focus + (1 if key == K.Key_Down else -1)) % len(self._bars)
+            self._flash = ''
+            self._refresh()
+            return True
+
+        if key in (K.Key_Left, K.Key_Right):
+            # handle_key() only carries the key itself (see wizard's event
+            # filter), so the Shift state is read from the app rather than an
+            # event — during key delivery it's the state of the press.
+            fast = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+            steps = self._steps_for(fast)
+            if key == K.Key_Right:
+                self._spend(steps)
+            else:
+                self._refund(steps)
+            return True
+
+        return False
 
 
 # ── Your Profile sub-hub: Basic Info / Results / Rating ───────────────────────
@@ -910,7 +1138,12 @@ class _ProfileScreen(QWidget):
     Up/Down moves the focus, Enter opens that sub-view FULL-SCREEN (the tabs
     give way to it, with a dark tint over the background for readability),
     Escape closes it back to the tab stack — a second Escape bubbles up to the
-    main hub."""
+    main hub.
+
+    Escape is the ONLY way out, here and nowhere else in the app: Backspace is
+    deliberately inert on this screen. Rating spends real XP on a keypress, and
+    a stray Backspace dumping the player back to the hub mid-spend is a worse
+    trade than losing the shortcut."""
 
     SUB_TABS = ['BASIC INFO', 'RESULTS', 'RATING']
 
@@ -976,11 +1209,16 @@ class _ProfileScreen(QWidget):
         self._results.load(rec)
         self._rating.load(rider)
 
+    def set_rating_commit(self, fn):
+        """Hand Rating the callback that persists a spend — see _RatingView."""
+        self._rating.set_commit(fn)
+
     def reset(self):
         """Always resume on the tab bar, nothing opened — same 'no stale
         state' rule as the rest of this feature."""
         self._focus = 0
         self._opened = False
+        self._rating.reset()
         self._sync_focus()
         self._content.setCurrentIndex(0)
         for sc in self._scrolls:
@@ -1006,11 +1244,22 @@ class _ProfileScreen(QWidget):
             elif key in (K.Key_Return, K.Key_Enter, K.Key_Space):
                 self._opened = True
                 self._content.setCurrentIndex(self._focus + 1)
-            elif key in (K.Key_Escape, K.Key_Backspace):
+            elif key == K.Key_Escape:      # Backspace deliberately does nothing
                 return 'close'
             return None
 
-        if key in (K.Key_Escape, K.Key_Backspace):
+        # Rating is the one sub-view that's interactive rather than just
+        # scrollable — it takes first refusal on every key so Up/Down pick a
+        # stat and Left/Right move it. It declines the ones it has no use for
+        # (Escape, say), which fall through to close.
+        if self._focus == 2 and self._rating.handle_key(key):
+            return 'scroll'
+
+        if key == K.Key_Escape:
+            # Rating debounces its writes, so anything spent in the last
+            # fraction of a second is still only in memory — force it out
+            # before the view goes away.
+            self._rating.flush()
             self._opened = False
             self._content.setCurrentIndex(0)
             return None
@@ -3945,6 +4194,7 @@ class SeasonHubPage(QWizardPage):
         self._stack.addWidget(self._wrap(hub_page))               # 1
 
         self._profile = _ProfileScreen()
+        self._profile.set_rating_commit(self._save_career_rider)
         self._stack.addWidget(self._wrap(self._profile))         # 2
 
         self._season_info = _SeasonInfoScreen(self._wiz)
@@ -4387,6 +4637,11 @@ class SeasonHubPage(QWizardPage):
             return True
 
         if idx == 2:                                      # Your Profile owns its own sub-nav
+            if key == K.Key_Backspace:
+                # Swallowed on this screen (see _ProfileScreen) — and silently,
+                # or the 'back' click would announce a move that didn't happen.
+                self._wiz.suppress_next_sfx = True
+                return True
             result = self._profile.handle_key(key)
             # Opening/closing a sub-view flips whether the reserved bottom strip
             # is tinted (see paint_gap_overlay); the gap filler is a separate
@@ -4415,6 +4670,18 @@ class SeasonHubPage(QWizardPage):
             return True
 
         return True
+
+    def _save_career_rider(self, rider: dict):
+        """Persist a Rating spend: to disk, and to the live roster the rest of
+        the season races against — the same pair p3_race keeps in step, since
+        wiz.df is what the engine reads and rider.json is what survives a
+        reload. Values go in as plain floats: save_career_rider serialises with
+        `default=int`, which would truncate anything numpy-typed."""
+        wiz = self._wiz
+        wiz.save_career_rider(rider)
+        name = rider.get('name')
+        for stat, _label, _color in STATS:
+            wiz.df.loc[wiz.df['name'] == name, stat] = float(rider[stat])
 
     def _open_profile(self):
         self._profile.reset()      # always land on the tab bar, not the last-viewed sub-tab
